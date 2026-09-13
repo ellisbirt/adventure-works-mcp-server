@@ -1,0 +1,7 @@
+# .claudeignore
+src/gateway/bin/
+src/gateway/obj/
+src/frontend/node_modules/
+src/frontend/dist/
+infrastructure/.terraform/
+.git/

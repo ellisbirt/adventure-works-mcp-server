@@ -1,0 +1,21 @@
+# .gitignore
+# .NET Build artifacts
+bin/
+obj/
+*.suo
+*.user
+
+# Node / Frontend dependencies
+node_modules/
+dist/
+npm-debug.log
+
+# Terraform local state variables and locks
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Local Secret Configuration files
+*.env
+appsettings.Development.json
