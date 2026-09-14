@@ -1,0 +1,11 @@
+subscription_id                = "00000000-0000-0000-0000-000000000000"
+entra_admin_login_username     = "your-account@live.com"
+entra_admin_object_id          = "00000000-0000-0000-0000-000000000000"
+resource_group_name            = "rg-enterprise-ai-portfolio-prod"
+sql_server_name                = "sql-enterprise-ai-srv-pw-demo"
+container_app_name             = "aca-enterprise-ai-gateway-prod"
+gateway_container_image        = "ghcr.io/your-user/enterprise-ai-gateway:latest"
+key_vault_name                 = "kv-ent-ai-gw-prod"
+# Set this only for local/Codespace access to Azure SQL. Keep null for hosted-only access.
+developer_ip_address           = null
+enable_public_network_access   = true

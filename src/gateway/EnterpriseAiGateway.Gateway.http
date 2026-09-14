@@ -1,0 +1,6 @@
+@EnterpriseAiGateway.Gateway_HostAddress = http://localhost:5136
+
+GET {{EnterpriseAiGateway.Gateway_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

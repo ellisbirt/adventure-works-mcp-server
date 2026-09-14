@@ -15,6 +15,30 @@ npm-debug.log
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+!*.tfvars.example
+
+# Environment variables and local secret files
+.env
+.env.*
+!.env.example
+!.env.*.example
+secrets/
+*.secret
+*.secrets
+*.key
+*.pem
+*.pfx
+*.p12
+credentials.json
+azure-credentials.json
+
+# Generated test and coverage output
+TestResults/
+coverage/
+coverage.*
 
 # Local Secret Configuration files
 *.env
