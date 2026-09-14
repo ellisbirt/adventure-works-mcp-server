@@ -8,6 +8,16 @@ output "gateway_app_name" {
   description = "Name of the gateway Container App."
 }
 
+output "frontend_url" {
+  value       = azurerm_storage_account.frontend.primary_web_endpoint
+  description = "Public URL of the React frontend Blob Static Website."
+}
+
+output "frontend_storage_account_name" {
+  value       = azurerm_storage_account.frontend.name
+  description = "Storage account used for the React static website deployment."
+}
+
 output "gateway_managed_identity_principal_id" {
   value       = azurerm_user_assigned_identity.gateway.principal_id
   description = "Principal ID of the gateway user-assigned managed identity."

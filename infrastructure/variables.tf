@@ -79,6 +79,12 @@ variable "key_vault_name" {
   default     = "kv-ent-ai-gw-prod"
 }
 
+variable "frontend_storage_account_name" {
+  description = "Globally unique storage account name for the React static website."
+  type        = string
+  default     = "stentaigatewayweb"
+}
+
 variable "anthropic_secret_name" {
   description = "Name of the Anthropic API secret created out-of-band in Key Vault."
   type        = string

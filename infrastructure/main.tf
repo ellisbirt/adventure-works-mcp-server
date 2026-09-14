@@ -123,6 +123,29 @@ resource "azurerm_application_insights" "gateway" {
   tags = var.tags
 }
 
+# 8. Low-cost frontend hosting using Azure Blob Static Website.
+# This is cheaper than App Service and sufficient for the built Vite assets.
+# For production applications requiring WAF, custom domains, or edge caching,
+# place Front Door/CDN in front of this endpoint.
+resource "azurerm_storage_account" "frontend" {
+  name                          = var.frontend_storage_account_name
+  resource_group_name           = azurerm_resource_group.gateway_rg.name
+  location                      = azurerm_resource_group.gateway_rg.location
+  account_tier                  = "Standard"
+  account_replication_type      = "LRS"
+  min_tls_version               = "TLS1_2"
+  https_traffic_only_enabled    = true
+  public_network_access_enabled = true
+
+  tags = var.tags
+}
+
+resource "azurerm_storage_account_static_website" "frontend" {
+  storage_account_id = azurerm_storage_account.frontend.id
+  index_document     = "index.html"
+  error_404_document = "index.html"
+}
+
 # 8. Consumption Azure Container Apps hosting
 resource "azurerm_user_assigned_identity" "gateway" {
   name                = "id-enterprise-ai-gateway-prod"
@@ -193,6 +216,10 @@ resource "azurerm_container_app" "gateway" {
       env {
         name  = "ApplicationInsights__ConnectionString"
         value = azurerm_application_insights.gateway.connection_string
+      }
+      env {
+        name  = "Cors__AllowedOrigins__0"
+        value = trimsuffix(azurerm_storage_account.frontend.primary_web_endpoint, "/")
       }
       env {
         name        = "Anthropic__ApiKey"
