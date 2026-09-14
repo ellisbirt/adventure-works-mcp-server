@@ -179,7 +179,7 @@ public class DependencyInjectionTests
         // Arrange
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
+            .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 { "Anthropic:ApiKey", "sk-ant-test-key" },
                 { "Anthropic:Model", "claude-3-5-sonnet-20241022" },
@@ -254,7 +254,7 @@ public class DependencyInjectionTests
         // Arrange
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
+            .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 { "Anthropic:ApiKey", "sk-ant-test-key" }
             })
@@ -317,7 +317,7 @@ public class DependencyInjectionTests
         // Arrange
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
+            .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 { "Anthropic:ApiKey", "sk-ant-test-key" }
             })
@@ -351,7 +351,7 @@ public class DependencyInjectionTests
         // Arrange
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string>
+            .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 { "Anthropic:ApiKey", "sk-ant-test-key" },
                 { "Anthropic:MaxTokens", "invalid-number" }

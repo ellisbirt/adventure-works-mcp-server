@@ -290,7 +290,7 @@ public class AnthropicClientTests
                 It.IsAny<EventId>(),
                 It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("InputTokens=500")),
                 It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception, string>>()
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()
             ),
             Times.Once
         );
@@ -336,7 +336,7 @@ public class AnthropicClientTests
                 It.IsAny<EventId>(),
                 It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("CacheRead=5000")),
                 It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception, string>>()
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()
             ),
             Times.Once
         );
