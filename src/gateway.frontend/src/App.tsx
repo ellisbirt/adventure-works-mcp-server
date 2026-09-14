@@ -15,7 +15,13 @@ type CallResponse = {
   isError: boolean
 }
 
-const apiUrl = import.meta.env.VITE_GATEWAY_URL ?? '/api'
+const apiUrl = import.meta.env.VITE_GATEWAY_URL
+  ? `${import.meta.env.VITE_GATEWAY_URL.replace(/\/$/, '')}/api/v1`
+  : '/api/v1'
+
+function correlationId() {
+  return crypto.randomUUID()
+}
 
 function App() {
   const [customerId, setCustomerId] = useState('')
@@ -26,7 +32,9 @@ function App() {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    fetch(`${apiUrl}/mcp/tools`)
+    fetch(`${apiUrl}/mcp/tools`, {
+      headers: { 'X-Correlation-ID': correlationId() },
+    })
       .then((response) => {
         if (!response.ok) throw new Error('Gateway unavailable')
         return response.json() as Promise<ToolResponse>
@@ -52,7 +60,10 @@ function App() {
     try {
       const response = await fetch(`${apiUrl}/mcp/tools/call`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': correlationId(),
+        },
         body: JSON.stringify({ name: 'get_customer_history', arguments: { customerId: Number(customerId) } }),
       })
       const data = (await response.json()) as CallResponse

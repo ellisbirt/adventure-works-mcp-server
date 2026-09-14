@@ -51,16 +51,15 @@ resource "azurerm_mssql_server" "sql_server" {
   public_network_access_enabled = var.enable_public_network_access
 }
 
-# IP firewall restrictions intentionally disabled for this public sample template.
-# For a real database, define explicit firewall rules or, preferably, use private
-# endpoints and remove public network access entirely.
-# resource "azurerm_mssql_firewall_rule" "home_dev_access" {
-#   for_each         = var.enable_public_network_access && var.developer_ip_address != null ? { developer = var.developer_ip_address } : {}
-#   name             = "AllowDeveloper"
-#   server_id        = azurerm_mssql_server.sql_server.id
-#   start_ip_address = each.value
-#   end_ip_address   = each.value
-# }
+# Allow only the explicitly configured developer address when public SQL access
+# is enabled. Leave developer_ip_address null for hosted-only deployments.
+resource "azurerm_mssql_firewall_rule" "developer_access" {
+  for_each         = var.enable_public_network_access && var.developer_ip_address != null ? { developer = var.developer_ip_address } : {}
+  name             = "AllowDeveloper"
+  server_id        = azurerm_mssql_server.sql_server.id
+  start_ip_address = each.value
+  end_ip_address   = each.value
+}
 
 # 5. Cost-Shielded Serverless Database Pre-Seeded with Enterprise Data
 resource "azurerm_mssql_database" "adventureworks_db" {

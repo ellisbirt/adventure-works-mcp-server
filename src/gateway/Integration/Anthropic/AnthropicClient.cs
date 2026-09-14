@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using EnterpriseAiGateway.Logging;
+using EnterpriseAiGateway.Infrastructure;
 using Microsoft.Extensions.Logging;
 
 namespace EnterpriseAiGateway.Integration.Anthropic;
@@ -167,12 +168,16 @@ public class AnthropicClient : IAnthropicClient
             AnthropicLogMessages.SendingMessage(_logger, _anthropicModel);
 
             // POST to Anthropic Messages API endpoint
-            var response = await _httpClient.PostAsJsonAsync(
-                "https://api.anthropic.com/v1/messages",
-                request,
-                JsonOptions,
-                cts.Token
-            );
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages")
+            {
+                Content = JsonContent.Create(request, options: JsonOptions)
+            };
+            if (!string.IsNullOrWhiteSpace(CorrelationContext.Id))
+            {
+                httpRequest.Headers.TryAddWithoutValidation("X-Correlation-ID", CorrelationContext.Id);
+            }
+
+            var response = await _httpClient.SendAsync(httpRequest, cts.Token);
 
             // Ensure successful response
             if (!response.IsSuccessStatusCode)
