@@ -34,7 +34,7 @@ variable "entra_admin_object_id" {
 variable "database_principal_name" {
   description = "Microsoft Entra service principal name created in SQL for the gateway managed identity."
   type        = string
-  default     = "app-enterprise-ai-gateway-prod"
+  default     = "id-enterprise-ai-gateway-prod"
 }
 
 variable "developer_ip_address" {

@@ -239,7 +239,7 @@ resource "azurerm_container_app" "gateway" {
       }
       env {
         name  = "ConnectionStrings__AdventureWorksConnection"
-        value = "Server=tcp:${azurerm_mssql_server.sql_server.fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.adventureworks_db.name};Authentication=Active Directory Managed Identity;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+        value = "Server=tcp:${azurerm_mssql_server.sql_server.fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.adventureworks_db.name};Authentication=Active Directory Managed Identity;User Id=${azurerm_user_assigned_identity.gateway.client_id};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
       }
     }
   }
