@@ -209,8 +209,35 @@ Change into the infrastructure directory:
 
 ```bash
 cd infrastructure
-terraform init -upgrade
+chmod 700 bootstrap-terraform-state.sh
+./bootstrap-terraform-state.sh
+terraform init -upgrade -migrate-state
 ```
+
+### Terraform State Backend
+
+Terraform state is stored in a dedicated Azure Blob Storage account configured in [backend.tf](infrastructure/backend.tf). The bootstrap script creates:
+
+- A dedicated `StorageV2` state account.
+- HTTPS-only access with TLS 1.2.
+- Public blob access disabled.
+- Blob versioning and 30-day delete retention.
+- A private `tfstate` container.
+- `Storage Blob Data Contributor` for the current Entra user.
+
+Run the bootstrap script before the first `terraform init -migrate-state`. The migration uploads the current local state to Azure and preserves resource ownership. Do not delete local state until migration completes successfully.
+
+For another resource group, storage account, or container name, set these variables before running the script and update the matching values in `backend.tf`:
+
+```bash
+export TF_STATE_RESOURCE_GROUP="rg-enterprise-ai-portfolio-prod"
+export TF_STATE_STORAGE_ACCOUNT="stentaitfstateprod"
+export TF_STATE_CONTAINER="tfstate"
+./bootstrap-terraform-state.sh
+terraform init -upgrade -migrate-state
+```
+
+The backend uses Azure CLI/Entra authentication and native Blob state locking. CI/CD identities must also have `Storage Blob Data Contributor` on the state account before running Terraform.
 
 Create a local untracked variables file from the example:
 
