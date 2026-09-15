@@ -8,10 +8,8 @@ namespace EnterpriseAiGateway.Tests.Api;
 public class AuthenticationEndpointsTests
 {
     [Theory]
-    [InlineData("/api/v1/mcp/tools")]
-    [InlineData("/mcp/tools")]
+    [InlineData("/api/v1/mcp")]
     [InlineData("/api/v1/chat")]
-    [InlineData("/chat")]
     public async Task ProtectedEndpoint_WithoutBearerToken_ReturnsUnauthorized(string path)
     {
         await using var factory = new WebApplicationFactory<Program>()
@@ -25,7 +23,7 @@ public class AuthenticationEndpointsTests
 
         var response = path.EndsWith("chat", StringComparison.Ordinal)
             ? await client.PostAsync(path, new StringContent("{\"message\":\"hello\"}", System.Text.Encoding.UTF8, "application/json"))
-            : await client.GetAsync(path);
+            : await client.PostAsync(path, new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}", System.Text.Encoding.UTF8, "application/json"));
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }

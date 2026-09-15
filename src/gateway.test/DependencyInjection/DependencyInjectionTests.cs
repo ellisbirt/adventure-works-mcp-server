@@ -99,8 +99,7 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksDbContext>(options =>
-            options.UseInMemoryDatabase("TestDb"));
+        services.AddSingleton(Mock.Of<ISecureTableCatalogRepository>());
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
         var provider = services.BuildServiceProvider();
@@ -116,8 +115,7 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksDbContext>(options =>
-            options.UseInMemoryDatabase("TestDb"));
+        services.AddSingleton(Mock.Of<ISecureTableCatalogRepository>());
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
         var provider = services.BuildServiceProvider();
@@ -138,35 +136,30 @@ public class DependencyInjectionTests
     }
 
     [Fact]
-    public async Task Repository_WithRegisteredDbContext_CanQueryCustomers()
+    public async Task Repository_WithRegisteredTableCatalog_ReturnsOnlyAllowListedColumns()
     {
-        // Arrange
-        var databaseName = "TestDb" + Guid.NewGuid();
+        // Arrange - SecureCustomerRepository now delegates to the same allow-listed
+        // column catalog as generic table reads, so only vetted columns come back.
+        var tableCatalog = new Mock<ISecureTableCatalogRepository>();
+        tableCatalog
+            .Setup(repository => repository.GetTableRowsAsync("SalesLT", "Customer", 1, "CustomerID", 1))
+            .ReturnsAsync("""[{"CustomerID":1,"ModifiedDate":"2024-01-01T00:00:00"}]""");
+
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksDbContext>(options =>
-            options.UseInMemoryDatabase(databaseName));
+        services.AddSingleton(tableCatalog.Object);
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
         var provider = services.BuildServiceProvider();
 
         using (var scope = provider.CreateScope())
         {
-            var context = scope.ServiceProvider.GetService<AdventureWorksDbContext>();
-            var customer = new EntityCustomer { CustomerID = 1, FirstName = "John", LastName = "Doe" };
-            context!.Customers.Add(customer);
-            await context.SaveChangesAsync();
-        }
-
-        using (var scope = provider.CreateScope())
-        {
             var repository = scope.ServiceProvider.GetService<ISecureCustomerRepository>();
 
             // Act
-            var result = await repository!.GetCustomerContextAsync(1, false);
+            var result = await repository!.GetCustomerContextAsync(1);
 
             // Assert
-            result.Should().Contain("John");
-            result.Should().Contain("Doe");
+            result.Should().Contain("CustomerID: 1").And.NotContain("FirstName");
         }
     }
 
@@ -295,6 +288,7 @@ public class DependencyInjectionTests
         // Act
         services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
+        services.AddScoped<ISecureTableCatalogRepository, SecureTableCatalogRepository>();
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
         services.AddHttpClient();
         services.AddLogging();
@@ -404,15 +398,15 @@ public class DependencyInjectionTests
         var mockAnthropicClient = _mockRepository.Create<IAnthropicClient>();
 
         mockRepository
-            .Setup(r => r.GetCustomerContextAsync(It.IsAny<int>(), It.IsAny<bool>()))
+            .Setup(r => r.GetCustomerContextAsync(It.IsAny<int>()))
             .ReturnsAsync("Test data");
 
         // Act
-        var result = await mockRepository.Object.GetCustomerContextAsync(1, false);
+        var result = await mockRepository.Object.GetCustomerContextAsync(1);
 
         // Assert
         result.Should().Be("Test data");
-        mockRepository.Verify(r => r.GetCustomerContextAsync(1, false), Times.Once);
+        mockRepository.Verify(r => r.GetCustomerContextAsync(1), Times.Once);
     }
 
     #endregion

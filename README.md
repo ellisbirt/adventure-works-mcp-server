@@ -34,7 +34,7 @@ The default deployment is intentionally public and low-cost. This repository is 
 
 ### Runtime Request Flow
 
-The gateway provides governed, read-only database access. Its current `/mcp/*` surface is a REST compatibility API; it is not a JSON-RPC MCP server. The chat endpoint uses Claude only after a tool result has been retrieved:
+The gateway provides governed, read-only database access through a JSON-RPC MCP endpoint. The chat endpoint uses Claude only after a tool result has been retrieved:
 
 ```mermaid
 sequenceDiagram
@@ -45,18 +45,20 @@ sequenceDiagram
 	participant D as Azure SQL
 
 	B->>F: Load index.html and assets
-	B->>G: GET /mcp/tools
-	G-->>B: Tool definition and input schema
-	B->>G: POST /mcp/tools/call { schema, table, limit }
+	B->>G: POST /api/v1/mcp initialize
+	G-->>B: JSON-RPC initialize result
+	B->>G: POST /api/v1/mcp tools/list
+	G-->>B: Tool definitions and input schemas
+	B->>G: POST /api/v1/mcp tools/call { schema, table, limit }
 	G->>I: Request SQL access token
 	I->>D: Authenticate as gateway identity
 	G->>D: Read schema metadata or safe table rows
 	D-->>G: Table metadata or rows
-	G->>G: Exclude personal, contact, location, and credential columns
+	G->>G: Exclude credential columns; redact and mark personal, contact, and location columns
 	G-->>B: MCP text response
 ```
 
-`/mcp/tools/call` returns governed SQL context directly. `POST /chat` uses Anthropic only after retrieving an approved MCP tool result; it never sends database entities or unapproved columns to the provider.
+`/api/v1/mcp` returns governed SQL context through JSON-RPC tool results. `POST /api/v1/chat` uses Anthropic only after retrieving an approved MCP tool result; it never sends database entities or unapproved columns to the provider.
 
 ### Gateway Boundaries
 
@@ -70,7 +72,7 @@ The gateway is split into explicit ownership boundaries:
 - `Program.cs`: dependency injection, CORS, Serilog/Application Insights, and minimal API routes.
 - `src/gateway.frontend`: browser UI and development proxy.
 
-The repository boundary prevents database entities from leaking directly into the API. The table catalog allows only SQL metadata identifiers and projects non-sensitive columns; endpoints return MCP DTOs rather than EF entities.
+The repository boundary prevents database entities from leaking directly into the API. The table catalog allows only vetted SQL metadata identifiers and projects useful columns, redacting personal ones; endpoints return MCP DTOs rather than EF entities.
 
 ### Identity and Secret Flow
 
@@ -126,14 +128,21 @@ The frontend job resolves the Container App hostname after gateway deployment an
 The gateway exposes:
 
 ```text
-GET  /mcp/tools
-POST /mcp/tools/call
-POST /chat
+POST /api/v1/mcp
+POST /api/v1/chat
 ```
 
-`GET /mcp/tools` advertises `get_customer_history`, `list_database_tables`, and `read_database_table`. The catalog tool returns every user table with only approved columns. The read tool requires catalog-provided schema and table names and permits 1-100 rows. Personal, contact, location, financial, and credential fields are excluded before rows are returned.
+`POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. JSON-RPC batches are supported; notifications receive no response body. The versionless `/mcp` route is retained as an alias. The old REST routes are removed.
 
-`POST /chat` accepts `{ "message": "..." }`. When `Anthropic:ApiKey` is configured, the gateway asks Claude to select from its MCP catalog, validates that selection against the safe catalog, executes the operation, and asks Claude to answer using only that MCP result. The browser never receives the Anthropic key or direct database access. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
+Example tool listing request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+```
+
+`tools/list` advertises `get_customer_history`, `list_database_tables`, and `read_database_table`. The catalog tool returns every user table with its useful columns. The read tool requires catalog-provided schema and table names and permits 1-100 rows. Credential and internal surrogate-key columns (e.g. password hashes, row GUIDs) are never returned; personal, contact, and location fields are returned but redacted and marked with a `[REDACTED]` value so their presence in the schema stays visible without leaking the underlying data.
+
+`POST /api/v1/chat` accepts `{ "message": "..." }`. When `Anthropic:ApiKey` is configured, the gateway asks Claude to select from its MCP catalog, validates that selection against the safe catalog, executes the operation, and asks Claude to answer using only that MCP result. The browser never receives the Anthropic key or direct database access. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
 
 ### Recruiter Sign-In
 

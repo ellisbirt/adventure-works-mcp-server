@@ -1,4 +1,5 @@
 // src/gateway/Core/DTOs/McpContracts.cs
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace EnterpriseAiGateway.Core.DTOs;
@@ -82,4 +83,27 @@ public record McpCallToolResponse(
 public record McpContentText(
     [property: JsonPropertyName("type")] string Type = "text",
     [property: JsonPropertyName("text")] string Text = ""
+);
+
+public sealed record McpJsonRpcRequest(
+    [property: JsonPropertyName("jsonrpc")] string? JsonRpc,
+    [property: JsonPropertyName("id")] JsonElement Id,
+    [property: JsonPropertyName("method")] string? Method,
+    [property: JsonPropertyName("params")] JsonElement Params
+)
+{
+    public bool IsNotification => Id.ValueKind == JsonValueKind.Undefined;
+}
+
+public sealed record McpJsonRpcError(
+    [property: JsonPropertyName("code")] int Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("data")] object? Data = null
+);
+
+public sealed record McpJsonRpcResponse(
+    [property: JsonPropertyName("jsonrpc")] string JsonRpc,
+    [property: JsonPropertyName("id")] JsonElement Id,
+    [property: JsonPropertyName("result"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] object? Result = null,
+    [property: JsonPropertyName("error"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] McpJsonRpcError? Error = null
 );
