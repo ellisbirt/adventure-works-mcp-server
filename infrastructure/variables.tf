@@ -116,7 +116,7 @@ variable "external_id_authority" {
 }
 
 variable "external_id_api_audience" {
-  description = "Application ID URI or audience configured for the gateway API. Leave empty to allow local unauthenticated development."
+  description = "API application client ID used as the aud claim in Microsoft Entra External ID v2 access tokens. Leave empty to allow local unauthenticated development."
   type        = string
   default     = ""
 }

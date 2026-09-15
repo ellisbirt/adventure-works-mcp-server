@@ -145,7 +145,7 @@ Set the following non-secret Terraform values before deployment:
 
 ```hcl
 external_id_authority    = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
-external_id_api_audience = "api://<gateway-api-client-id>"
+external_id_api_audience = "<gateway-api-client-id>"
 external_id_spa_client_id = "<spa-client-id>"
 ```
 
@@ -288,7 +288,7 @@ entra_admin_object_id      = "<ENTRA_ADMIN_OBJECT_ID>"
 gateway_container_image    = "ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest"
 enable_public_network_access = true
 external_id_authority        = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
-external_id_api_audience     = "api://<gateway-api-client-id>"
+external_id_api_audience     = "<gateway-api-client-id>"
 external_id_spa_client_id    = "<spa-client-id>"
 ```
 

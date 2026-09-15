@@ -63,6 +63,7 @@ if (authenticationRequired)
         {
             options.Authority = authenticationAuthority;
             options.Audience = authenticationAudience;
+            options.MapInboundClaims = false;
         });
     builder.Services.AddAuthorization(options => options.AddPolicy("gateway-api", policy =>
         policy.RequireAuthenticatedUser().RequireAssertion(context =>
