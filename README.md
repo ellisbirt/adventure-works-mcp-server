@@ -34,7 +34,7 @@ The default deployment is intentionally public and low-cost:
 
 ### Runtime Request Flow
 
-The gateway provides governed, read-only database access. It does not call Claude:
+The gateway provides governed, read-only database access. The chat endpoint uses Claude only after an MCP tool result has been retrieved:
 
 ```mermaid
 sequenceDiagram
@@ -130,6 +130,26 @@ POST /chat
 `GET /mcp/tools` advertises `get_customer_history`, `list_database_tables`, and `read_database_table`. The catalog tool returns every user table with only approved columns. The read tool requires catalog-provided schema and table names and permits 1-100 rows. Personal, contact, location, financial, and credential fields are excluded before rows are returned.
 
 `POST /chat` accepts `{ "message": "..." }`. When `Anthropic:ApiKey` is configured, the gateway asks Claude to select from its MCP catalog, validates that selection against the safe catalog, executes the operation, and asks Claude to answer using only that MCP result. The browser never receives the Anthropic key or direct database access. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
+
+### Recruiter Sign-In
+
+The Blob website remains public so it can be shared. The gateway requires a Microsoft Entra External ID access token in deployed environments. Recruiters can self-register using a Microsoft or work account, Google, or email one-time passcode.
+
+Create a dedicated External ID tenant, enable those three identity providers, then create:
+
+1. A single-page application registration with the production Blob website URL and `http://localhost:5173` as redirect URIs.
+2. An API registration that exposes the `access_as_user` delegated scope.
+3. SPA API permission for that scope, granting consent as required by the External ID tenant.
+
+Set the following non-secret Terraform values before deployment:
+
+```hcl
+external_id_authority    = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
+external_id_api_audience = "api://<gateway-api-client-id>"
+external_id_spa_client_id = "<spa-client-id>"
+```
+
+Terraform refuses to deploy the public gateway without all three values. The API then requires a bearer token containing the `access_as_user` scope. Keep `Authentication:Enabled` false only for local development.
 
 ### Regenerating The EF Model
 
@@ -267,6 +287,9 @@ entra_admin_login_username = "<ENTRA_ADMIN_LOGIN>"
 entra_admin_object_id      = "<ENTRA_ADMIN_OBJECT_ID>"
 gateway_container_image    = "ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest"
 enable_public_network_access = true
+external_id_authority        = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
+external_id_api_audience     = "api://<gateway-api-client-id>"
+external_id_spa_client_id    = "<spa-client-id>"
 ```
 
 Get the Entra administrator object ID with:
@@ -433,6 +456,9 @@ AZURE_TENANT_ID
 AZURE_SUBSCRIPTION_ID
 FRONTEND_STORAGE_ACCOUNT
 GATEWAY_URL
+ENTRA_EXTERNAL_ID_AUTHORITY
+ENTRA_EXTERNAL_ID_SPA_CLIENT_ID
+ENTRA_EXTERNAL_ID_API_SCOPE
 ```
 
 Create an Entra app registration/service principal and federated credential for the `main` branch. The standard GitHub subject is:

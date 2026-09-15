@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { ArrowUpRight, Check, Database, LoaderCircle, MessageCircle, Search, Send, ShieldCheck, Table2, Terminal, X } from 'lucide-react'
+import { apiScope, authenticationEnabled } from './auth'
 import './App.css'
 
 type ToolResponse = {
@@ -35,6 +37,8 @@ function correlationId() {
 }
 
 function App() {
+  const { accounts, instance } = useMsal()
+  const isAuthenticated = useIsAuthenticated()
   const [tables, setTables] = useState<TableDefinition[]>([])
   const [selectedTable, setSelectedTable] = useState('')
   const [rowLimit, setRowLimit] = useState('20')
@@ -48,31 +52,54 @@ function App() {
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatLoading, setChatLoading] = useState(false)
 
+  async function apiHeaders() {
+    const headers: Record<string, string> = { 'X-Correlation-ID': correlationId() }
+    if (!authenticationEnabled) return headers
+
+    const account = instance.getActiveAccount() ?? accounts[0]
+    if (!account) throw new Error('Sign in to access the gateway.')
+    const token = await instance.acquireTokenSilent({ account, scopes: [apiScope] })
+    headers.Authorization = `Bearer ${token.accessToken}`
+    return headers
+  }
+
+  function signIn() {
+    void instance.loginRedirect({ scopes: [apiScope] })
+  }
+
+  function signOut() {
+    void instance.logoutRedirect({ account: instance.getActiveAccount() ?? accounts[0] })
+  }
+
   useEffect(() => {
-    fetch(`${apiUrl}/mcp/tools`, {
-      headers: { 'X-Correlation-ID': correlationId() },
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error('Gateway unavailable')
-        return response.json() as Promise<ToolResponse>
-      })
-      .then((data) => {
+    if (authenticationEnabled && !isAuthenticated) return
+
+    async function loadCatalog() {
+      try {
+        const headers = await apiHeaders()
+        const toolsResponse = await fetch(`${apiUrl}/mcp/tools`, { headers })
+        if (!toolsResponse.ok) throw new Error('Gateway unavailable')
+        const data = await toolsResponse.json() as ToolResponse
         setTool(data.tools[0] ?? null)
         setConnected(true)
-        return fetch(`${apiUrl}/mcp/tools/call`, {
+
+        const catalogResponse = await fetch(`${apiUrl}/mcp/tools/call`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': correlationId() },
+          headers: { 'Content-Type': 'application/json', ...headers },
           body: JSON.stringify({ name: 'list_database_tables', arguments: {} }),
         })
-      })
-      .then((response) => response.json() as Promise<CallResponse>)
-      .then((data) => {
-        const catalog = JSON.parse(data.content?.[0]?.text ?? '[]') as TableDefinition[]
+        if (!catalogResponse.ok) throw new Error('Gateway unavailable')
+        const catalogData = await catalogResponse.json() as CallResponse
+        const catalog = JSON.parse(catalogData.content?.[0]?.text ?? '[]') as TableDefinition[]
         setTables(catalog)
         setSelectedTable(catalog[0] ? `${catalog[0].schema}.${catalog[0].name}` : '')
-      })
-      .catch(() => setConnected(false))
-  }, [])
+      } catch {
+        setConnected(false)
+      }
+    }
+
+    void loadCatalog()
+  }, [accounts, instance, isAuthenticated])
 
   async function readTable(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -92,11 +119,12 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Correlation-ID': correlationId(),
+          ...(await apiHeaders()),
         },
         body: JSON.stringify({ name: 'read_database_table', arguments: { schema, table, limit } }),
       })
       const data = (await response.json()) as CallResponse
+        if (!response.ok) throw new Error('Gateway unavailable')
       if (!response.ok || data.isError) throw new Error(data.content?.[0]?.text ?? 'The gateway rejected this request.')
       setResult(data.content?.[0]?.text ?? 'No customer context returned.')
     } catch (requestError) {
@@ -119,7 +147,7 @@ function App() {
     try {
       const response = await fetch(`${apiUrl}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': correlationId() },
+        headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
         body: JSON.stringify({ message: chatMessage.trim() }),
       })
       const data = (await response.json()) as ChatResponse | { error?: string }
@@ -143,7 +171,7 @@ function App() {
             <div className="grid size-10 place-items-center rounded-full bg-ink text-mint"><Terminal size={19} /></div>
             <div><p className="font-display text-lg font-bold tracking-tight">Grounding Desk</p><p className="font-mono text-[10px] uppercase tracking-[0.2em] text-moss">Enterprise AI Gateway</p></div>
           </div>
-          <div className="flex items-center gap-2 rounded-full border border-ink/15 bg-white/40 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em]"><span className={`size-2 rounded-full ${connected ? 'bg-emerald-600' : 'bg-coral'}`} />{connected ? 'Gateway online' : 'Gateway offline'}</div>
+          <div className="flex items-center gap-2"><div className="rounded-full border border-ink/15 bg-white/40 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em]"><span className={`size-2 rounded-full ${connected ? 'bg-emerald-600' : 'bg-coral'}`} />{connected ? 'Gateway online' : 'Gateway offline'}</div>{authenticationEnabled && (isAuthenticated ? <button data-testid="sign-out-button" type="button" onClick={signOut} className="min-h-9 border border-ink px-3 font-mono text-[10px] uppercase tracking-[0.14em]">Sign out</button> : <button data-testid="sign-in-button" type="button" onClick={signIn} className="min-h-9 bg-ink px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-paper">Sign in</button>)}</div>
         </header>
 
         <section className="grid gap-12 pb-16 pt-14 lg:grid-cols-[1.05fr_0.95fr] lg:items-end lg:pt-24">

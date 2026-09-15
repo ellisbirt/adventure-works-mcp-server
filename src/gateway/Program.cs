@@ -8,6 +8,7 @@ using EnterpriseAiGateway.Infrastructure;
 using EnterpriseAiGateway.Integration.Anthropic;
 using EnterpriseAiGateway.Integration.Chat;
 using EnterpriseAiGateway.Logging;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.AspNetCore.RateLimiting;
@@ -15,6 +16,13 @@ using System.Threading.RateLimiting;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+var authenticationAuthority = builder.Configuration["Authentication:Authority"];
+var authenticationAudience = builder.Configuration["Authentication:Audience"];
+var authenticationScope = builder.Configuration["Authentication:RequiredScope"] ?? "access_as_user";
+var authenticationRequired = builder.Configuration.GetValue<bool>("Authentication:Enabled");
+var authenticationEnabled = !string.IsNullOrWhiteSpace(authenticationAuthority) && !string.IsNullOrWhiteSpace(authenticationAudience);
+if (authenticationRequired && !authenticationEnabled)
+    throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when authentication is enabled.");
 
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 32 * 1024);
 
@@ -31,14 +39,36 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.AddPolicy("mcp", context => RateLimitPartition.GetFixedWindowLimiter(
-        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        GetRateLimitPartitionKey(context),
         _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = 60,
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0
         }));
+    options.AddPolicy("chat", context => RateLimitPartition.GetFixedWindowLimiter(
+        GetRateLimitPartitionKey(context),
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
 });
+
+if (authenticationRequired)
+{
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = authenticationAuthority;
+            options.Audience = authenticationAudience;
+        });
+    builder.Services.AddAuthorization(options => options.AddPolicy("gateway-api", policy =>
+        policy.RequireAuthenticatedUser().RequireAssertion(context =>
+            context.User.Claims.Any(claim => claim.Type == "scp" &&
+                claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(authenticationScope, StringComparer.Ordinal)))));
+}
 
 builder.Host.UseSerilog((context, services, loggerConfiguration) =>
 {
@@ -68,7 +98,17 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["Anthropic:ApiKey"]))
 var app = builder.Build();
 app.UseMiddleware<CorrelationMiddleware>();
 app.UseCors();
+if (authenticationRequired)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
 app.UseRateLimiter();
+
+string GetRateLimitPartitionKey(HttpContext context) =>
+    context.User.FindFirst("sub")?.Value ??
+    context.User.FindFirst("oid")?.Value ??
+    context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
 void MapMcpEndpoints(IEndpointRouteBuilder routes)
 {
@@ -217,13 +257,17 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         {
             return Results.StatusCode(StatusCodes.Status502BadGateway);
         }
-    }).RequireRateLimiting("mcp");
+    }).RequireRateLimiting("chat");
 }
 
 // Versioned API is canonical; legacy paths remain as compatibility aliases.
-MapMcpEndpoints(app.MapGroup("/api/v1"));
-MapMcpEndpoints(app);
-MapChatEndpoints(app.MapGroup("/api/v1"));
-MapChatEndpoints(app);
+var api = app.MapGroup("/api/v1");
+if (authenticationRequired) api.RequireAuthorization("gateway-api");
+MapMcpEndpoints(api);
+MapChatEndpoints(api);
+var legacyApi = app.MapGroup("");
+if (authenticationRequired) legacyApi.RequireAuthorization("gateway-api");
+MapMcpEndpoints(legacyApi);
+MapChatEndpoints(legacyApi);
 
 app.Run();

@@ -58,6 +58,9 @@ jobs:
         working-directory: src/gateway.frontend
         env:
           VITE_GATEWAY_URL: ${{ vars.GATEWAY_URL }}
+          VITE_ENTRA_AUTHORITY: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
+          VITE_ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
+          VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
         run: npm run build
 
   image:
@@ -135,6 +138,9 @@ jobs:
         working-directory: src/gateway.frontend
         env:
           VITE_GATEWAY_URL: ${{ vars.GATEWAY_URL }}
+          VITE_ENTRA_AUTHORITY: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
+          VITE_ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
+          VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
         run: npm run build
 
       - name: Login to Azure with OIDC

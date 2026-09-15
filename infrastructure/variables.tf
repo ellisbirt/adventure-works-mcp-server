@@ -109,6 +109,24 @@ variable "anthropic_request_timeout_seconds" {
   default     = 30
 }
 
+variable "external_id_authority" {
+  description = "Microsoft Entra External ID OpenID Connect authority for the protected gateway API. Leave empty to allow local unauthenticated development."
+  type        = string
+  default     = ""
+}
+
+variable "external_id_api_audience" {
+  description = "Application ID URI or audience configured for the gateway API. Leave empty to allow local unauthenticated development."
+  type        = string
+  default     = ""
+}
+
+variable "external_id_spa_client_id" {
+  description = "Public client ID of the External ID SPA application."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags applied to gateway resources."
   type        = map(string)

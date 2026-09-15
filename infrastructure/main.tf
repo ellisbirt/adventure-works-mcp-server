@@ -178,6 +178,13 @@ resource "azurerm_container_app" "gateway" {
   resource_group_name          = azurerm_resource_group.gateway_rg.name
   revision_mode                = "Single"
 
+  lifecycle {
+    precondition {
+      condition     = var.external_id_authority != "" && var.external_id_api_audience != "" && var.external_id_spa_client_id != ""
+      error_message = "External ID authority, API audience, and SPA client ID must be configured before deploying the public gateway."
+    }
+  }
+
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.gateway.id]
@@ -219,6 +226,22 @@ resource "azurerm_container_app" "gateway" {
       env {
         name  = "Cors__AllowedOrigins__0"
         value = trimsuffix(azurerm_storage_account.frontend.primary_web_endpoint, "/")
+      }
+      env {
+        name  = "Authentication__Enabled"
+        value = "true"
+      }
+      env {
+        name  = "Authentication__Authority"
+        value = var.external_id_authority
+      }
+      env {
+        name  = "Authentication__Audience"
+        value = var.external_id_api_audience
+      }
+      env {
+        name  = "Authentication__RequiredScope"
+        value = "access_as_user"
       }
       env {
         name        = "Anthropic__ApiKey"
