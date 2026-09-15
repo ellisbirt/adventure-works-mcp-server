@@ -1,5 +1,5 @@
-// src/gateway/Program.cs
 using System.Text.Json;
+using System.Collections.Concurrent;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
@@ -27,6 +27,8 @@ if (authenticationRequired && !authenticationEnabled)
     throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when authentication is enabled.");
 
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 32 * 1024);
+const int maxMcpBatchRequests = 20;
+var mcpSessions = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
 builder.Services.AddApplicationInsightsTelemetry();
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
@@ -85,7 +87,6 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
             TelemetryConverter.Traces);
 });
 
-// Connect your database connection strings directly to your live Azure SQL or local fallback container
 builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("AdventureWorksConnection"))
         .AddInterceptors(new CorrelationCommandInterceptor()));
@@ -186,6 +187,7 @@ void MapMcpEndpoints(IEndpointRouteBuilder routes)
         ILogger<Program> logger,
         CancellationToken cancellationToken) =>
     {
+        var sessionId = httpRequest.Headers["Mcp-Session-Id"].FirstOrDefault();
         JsonDocument document;
         try
         {
@@ -202,27 +204,56 @@ void MapMcpEndpoints(IEndpointRouteBuilder routes)
             {
                 if (document.RootElement.GetArrayLength() == 0)
                     return Results.Json(new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, "Invalid Request.")), statusCode: StatusCodes.Status400BadRequest);
+                if (document.RootElement.GetArrayLength() > maxMcpBatchRequests)
+                    return Results.Json(new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, $"Batch requests may contain at most {maxMcpBatchRequests} items.")), statusCode: StatusCodes.Status400BadRequest);
+
+                if (document.RootElement.EnumerateArray().Any(IsInitializeRequest))
+                {
+                    sessionId = CreateMcpSession(mcpSessions);
+                    httpRequest.HttpContext.Response.Headers["Mcp-Session-Id"] = sessionId;
+                }
 
                 var responses = new List<McpJsonRpcResponse>();
                 foreach (var item in document.RootElement.EnumerateArray())
                 {
-                    var response = await ProcessMcpRequestAsync(item, repo, tableCatalog, logger, cancellationToken);
+                    var response = await ProcessMcpRequestAsync(item, sessionId, mcpSessions, repo, tableCatalog, logger, cancellationToken);
                     if (response is not null) responses.Add(response);
                 }
 
                 return responses.Count == 0 ? Results.NoContent() : Results.Json(responses);
             }
 
-            var singleResponse = await ProcessMcpRequestAsync(document.RootElement, repo, tableCatalog, logger, cancellationToken);
+            if (IsInitializeRequest(document.RootElement))
+            {
+                sessionId = CreateMcpSession(mcpSessions);
+                httpRequest.HttpContext.Response.Headers["Mcp-Session-Id"] = sessionId;
+            }
+
+            var singleResponse = await ProcessMcpRequestAsync(document.RootElement, sessionId, mcpSessions, repo, tableCatalog, logger, cancellationToken);
             return singleResponse is null ? Results.NoContent() : Results.Json(singleResponse);
         }
     }).RequireRateLimiting("mcp");
+}
+
+static bool IsInitializeRequest(JsonElement element) =>
+    element.ValueKind == JsonValueKind.Object &&
+    element.TryGetProperty("method", out var method) &&
+    method.ValueKind == JsonValueKind.String &&
+    method.GetString() == "initialize";
+
+static string CreateMcpSession(ConcurrentDictionary<string, byte> sessions)
+{
+    var sessionId = Guid.NewGuid().ToString("N");
+    sessions.TryAdd(sessionId, 0);
+    return sessionId;
 }
 
 static JsonElement JsonNullId() => JsonDocument.Parse("null").RootElement.Clone();
 
 async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
     JsonElement element,
+    string? sessionId,
+    ConcurrentDictionary<string, byte> sessions,
     ISecureCustomerRepository repo,
     ISecureTableCatalogRepository tableCatalog,
     ILogger<Program> logger,
@@ -249,6 +280,9 @@ async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
     var id = request.Id.ValueKind == JsonValueKind.Undefined ? JsonNullId() : request.Id.Clone();
     McpJsonRpcResponse? Response(object result) => request.IsNotification ? null : new McpJsonRpcResponse("2.0", id, Result: result);
     McpJsonRpcResponse? Error(int code, string message) => request.IsNotification ? null : new McpJsonRpcResponse("2.0", id, Error: new McpJsonRpcError(code, message));
+
+    if (request.Method != "initialize" && (string.IsNullOrWhiteSpace(sessionId) || !sessions.ContainsKey(sessionId)))
+        return Error(-32000, "MCP session is not initialized.");
 
     if (request.Method == "notifications/initialized") return null;
 

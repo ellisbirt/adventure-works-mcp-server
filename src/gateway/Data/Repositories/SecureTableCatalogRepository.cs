@@ -1,7 +1,9 @@
 using System.Data;
 using System.Data.Common;
 using System.Text.Json;
+using EnterpriseAiGateway.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using EnterpriseAiGateway.Data.Scaffolded;
 
 namespace EnterpriseAiGateway.Data.Repositories;
@@ -23,59 +25,6 @@ public interface ISecureTableCatalogRepository
 public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 {
     internal const string RedactedMarker = "[REDACTED]";
-
-    // Per-table policy of which columns are useful enough to return, and which of those
-    // are personal/sensitive and must be redacted rather than omitted. Credential material
-    // (password hash/salt) and internal surrogate keys (rowguid) are left out of both lists
-    // entirely: they are never useful to a caller, so they are never returned at all.
-    // Tables absent from this map expose no columns and must be added here deliberately.
-    private static readonly Dictionary<string, Dictionary<string, ColumnPolicy>> ColumnPolicyByTable =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["SalesLT"] = new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Address"] = Policy(
-                    safeColumns: ["AddressID", "City", "StateProvince", "CountryRegion", "ModifiedDate"],
-                    piiColumns: ["AddressLine1", "AddressLine2", "PostalCode"]),
-                ["Customer"] = Policy(
-                    safeColumns: ["CustomerID", "NameStyle", "SalesPerson", "ModifiedDate"],
-                    piiColumns: ["Title", "FirstName", "MiddleName", "LastName", "Suffix", "CompanyName", "EmailAddress", "Phone"]),
-                ["CustomerAddress"] = Policy(
-                    safeColumns: ["CustomerID", "AddressID", "AddressType", "ModifiedDate"]),
-                ["Product"] = Policy(
-                    safeColumns: [
-                        "ProductID", "Name", "ProductNumber", "Color", "StandardCost", "ListPrice",
-                        "Size", "Weight", "ProductCategoryID", "ProductModelID", "SellStartDate",
-                        "SellEndDate", "DiscontinuedDate", "ModifiedDate"]),
-                ["ProductCategory"] = Policy(
-                    safeColumns: ["ProductCategoryID", "ParentProductCategoryID", "Name", "ModifiedDate"]),
-                ["ProductDescription"] = Policy(
-                    safeColumns: ["ProductDescriptionID", "Description", "ModifiedDate"]),
-                ["ProductModel"] = Policy(
-                    safeColumns: ["ProductModelID", "Name", "ModifiedDate"]),
-                ["ProductModelProductDescription"] = Policy(
-                    safeColumns: ["ProductModelID", "ProductDescriptionID", "Culture", "ModifiedDate"]),
-                ["SalesOrderDetail"] = Policy(
-                    safeColumns: [
-                        "SalesOrderID", "SalesOrderDetailID", "OrderQty", "ProductID", "UnitPrice",
-                        "UnitPriceDiscount", "LineTotal", "ModifiedDate"]),
-                ["SalesOrderHeader"] = Policy(
-                    safeColumns: [
-                        "SalesOrderID", "RevisionNumber", "OrderDate", "DueDate", "ShipDate", "Status",
-                        "OnlineOrderFlag", "SalesOrderNumber", "PurchaseOrderNumber", "AccountNumber",
-                        "CustomerID", "ShipToAddressID", "BillToAddressID", "ShipMethod", "SubTotal",
-                        "TaxAmt", "Freight", "TotalDue", "Comment", "ModifiedDate"],
-                    piiColumns: ["CreditCardApprovalCode"]),
-            },
-        };
-
-    private sealed record ColumnPolicy(IReadOnlyList<string> Columns, IReadOnlySet<string> PiiColumns);
-
-    private static ColumnPolicy Policy(string[] safeColumns, string[]? piiColumns = null)
-    {
-        var pii = piiColumns ?? [];
-        return new ColumnPolicy([.. safeColumns, .. pii], new HashSet<string>(pii, StringComparer.OrdinalIgnoreCase));
-    }
 
     private readonly AdventureWorksDbContext _context;
 
@@ -110,7 +59,7 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
             }
 
             var column = reader.GetString(2);
-            if (IsAllowedColumn(key.Schema, key.Name, column)) columns.Add(column);
+            if (IsAllowedColumn(_context.Model, key.Schema, key.Name, column)) columns.Add(column);
         }
 
         return tables
@@ -138,8 +87,8 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 
         // PII columns are never selected from the database at all; they are stamped with the
         // redacted marker after the row is materialized instead of being fetched and discarded.
-        var queryColumns = tableDefinition.Columns.Where(column => !IsPiiColumn(schema, table, column)).ToList();
-        var piiColumns = tableDefinition.Columns.Where(column => IsPiiColumn(schema, table, column)).ToList();
+        var queryColumns = tableDefinition.Columns.Where(column => !IsPiiColumn(_context.Model, schema, table, column)).ToList();
+        var piiColumns = tableDefinition.Columns.Where(column => IsPiiColumn(_context.Model, schema, table, column)).ToList();
 
         await using var connection = _context.Database.GetDbConnection();
         await connection.OpenAsync();
@@ -182,13 +131,29 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 
     private static string QuoteIdentifier(string identifier) => $"[{identifier.Replace("]", "]]", StringComparison.Ordinal)}]";
 
-    public static bool IsAllowedColumn(string schema, string table, string columnName) =>
-        ColumnPolicyByTable.TryGetValue(schema, out var tables) &&
-        tables.TryGetValue(table, out var policy) &&
-        policy.Columns.Contains(columnName, StringComparer.OrdinalIgnoreCase);
+    internal static bool IsAllowedColumn(IModel model, string schema, string table, string columnName) =>
+        GetColumnExposure(model, schema, table, columnName) is McpFieldExposure.Safe or McpFieldExposure.Redact;
 
-    public static bool IsPiiColumn(string schema, string table, string columnName) =>
-        ColumnPolicyByTable.TryGetValue(schema, out var tables) &&
-        tables.TryGetValue(table, out var policy) &&
-        policy.PiiColumns.Contains(columnName);
+    internal static bool IsPiiColumn(IModel model, string schema, string table, string columnName) =>
+        GetColumnExposure(model, schema, table, columnName) is McpFieldExposure.Redact;
+
+    private static McpFieldExposure GetColumnExposure(IModel model, string schema, string table, string columnName)
+    {
+        var entityType = model.GetEntityTypes().FirstOrDefault(entity =>
+            entity.GetSchema()?.Equals(schema, StringComparison.OrdinalIgnoreCase) == true &&
+            entity.GetTableName()?.Equals(table, StringComparison.OrdinalIgnoreCase) == true);
+        if (entityType is null) return McpFieldExposure.Exclude;
+
+        var storeObject = StoreObjectIdentifier.Table(entityType.GetTableName()!, entityType.GetSchema());
+        var property = entityType.GetProperties().FirstOrDefault(candidate =>
+            candidate.GetColumnName(storeObject)?.Equals(columnName, StringComparison.OrdinalIgnoreCase) == true);
+        if (property is null) return McpFieldExposure.Exclude;
+
+        var value = property.FindAnnotation(McpEntityExposure.AnnotationName)?.Value?.ToString();
+        // Fail closed: a property with no exposure annotation (or an unparsable one) is excluded,
+        // not treated as safe, so newly scaffolded columns are hidden until deliberately classified.
+        return Enum.TryParse<McpFieldExposure>(value, out var exposure)
+            ? exposure
+            : McpFieldExposure.Exclude;
+    }
 }

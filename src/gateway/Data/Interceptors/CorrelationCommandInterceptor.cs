@@ -34,5 +34,5 @@ public sealed class CorrelationCommandInterceptor : DbCommandInterceptor
         }
     }
 
-    private static string Sanitize(string value) => value.Replace("*/", "* /", StringComparison.Ordinal);
+    internal static string Sanitize(string value) => value.Replace("*/", "* /", StringComparison.Ordinal);
 }

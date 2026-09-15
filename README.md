@@ -1,6 +1,6 @@
 # Enterprise AI Gateway
 
-An end-to-end portfolio sample showing a React frontend, a .NET 8 MCP-shaped gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
+An end-to-end portfolio sample showing a React frontend, a .NET 8 JSON-RPC MCP gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
 
 ## Architecture
 
@@ -46,8 +46,8 @@ sequenceDiagram
 
 	B->>F: Load index.html and assets
 	B->>G: POST /api/v1/mcp initialize
-	G-->>B: JSON-RPC initialize result
-	B->>G: POST /api/v1/mcp tools/list
+	G-->>B: JSON-RPC result + Mcp-Session-Id
+	B->>G: POST /api/v1/mcp tools/list + session header
 	G-->>B: Tool definitions and input schemas
 	B->>G: POST /api/v1/mcp tools/call { schema, table, limit }
 	G->>I: Request SQL access token
@@ -65,14 +65,15 @@ sequenceDiagram
 The gateway is split into explicit ownership boundaries:
 
 - `Core/DTOs`: MCP request, response, tool, and content contracts.
-- `Data/Scaffolded`: database-first EF Core context and generated `SalesLT` entities. Regenerate these files rather than editing them directly.
+- `Data/Scaffolded`: database-first EF Core context and generated `SalesLT` entities. Regenerate generated files rather than editing them directly; the hand-authored partial model policy remains alongside the context.
+- `Data/McpEntityExposure.cs` and `Data/Scaffolded/AdventureWorksDbContext.McpPolicy.cs`: EF model annotations defining safe, redacted, and excluded fields for the MCP catalog.
 - `Data/Repositories`: SQL access and PII masking policy.
 - `Integration/Anthropic`: typed Anthropic contracts and HTTP client.
 - `Logging`: source-generated structured log messages.
 - `Program.cs`: dependency injection, CORS, Serilog/Application Insights, and minimal API routes.
 - `src/gateway.frontend`: browser UI and development proxy.
 
-The repository boundary prevents database entities from leaking directly into the API. The table catalog allows only vetted SQL metadata identifiers and projects useful columns, redacting personal ones; endpoints return MCP DTOs rather than EF entities.
+The repository boundary prevents database entities from leaking directly into the API. The table catalog reads the EF model's explicit exposure annotations, allows only vetted SQL metadata identifiers, and projects useful columns while marking redacted fields; endpoints return MCP DTOs rather than EF entities.
 
 ### Identity and Secret Flow
 
@@ -106,7 +107,7 @@ flowchart LR
 	AzureLogin --> Blob
 ```
 
-Pull requests run the backend tests and frontend build gate. Merges to `main` run the same gate, then publish the gateway image as `sha-<commit-sha>` to GHCR. Deployment is a separate manual workflow: an operator selects one of those immutable SHA tags, the workflow updates the Container App, builds and uploads the frontend from the same commit, then restarts the active Container App revision. Azure authentication uses a federated Entra credential, so the workflows do not require an Azure client secret.
+Pull requests run the backend tests and frontend build gate. Merges to `main` run the same gate, collect Cobertura coverage as a workflow artifact, then publish the gateway image as `sha-<commit-sha>` to GHCR. Deployment is a separate manual workflow protected by the repository's `production` environment: an operator selects one of those immutable SHA tags, the workflow updates the Container App, builds and uploads the frontend from the same commit, then restarts the active Container App revision. Azure authentication uses a federated Entra credential, so the workflows do not require an Azure client secret.
 
 The frontend job resolves the Container App hostname after gateway deployment and rebuilds the static assets with that URL. The hostname is stable for this Container App; an out-of-band hostname change requires a frontend redeployment.
 
@@ -119,7 +120,7 @@ The frontend job resolves the Container App hostname after gateway deployment an
 
 ### Deployment Posture
 
-**Implemented demo posture:** the sample uses public Container Apps ingress and permits public access to Azure SQL and Key Vault so it remains usable from Codespaces and dynamic developer IP addresses. It uses Microsoft Entra authentication for the gateway, managed identity for SQL and Key Vault, Key Vault secret references, encrypted Blob Terraform state, least-privilege database reads, and digest-pinned application revisions.
+**Implemented demo posture:** the sample uses public Container Apps ingress and permits public access to Azure SQL and Key Vault so it remains usable from Codespaces and dynamic developer IP addresses. It uses Microsoft Entra authentication for the gateway, managed identity for SQL and Key Vault, Key Vault secret references, encrypted Blob Terraform state, least-privilege database reads, and immutable SHA-tagged application revisions. The manual deployment workflow is protected by the `production` GitHub Environment when required reviewers are configured there.
 
 **Production requirements not implemented here:** private Container Apps networking, private endpoints and DNS for SQL/Key Vault/storage, disabled public network access, WAF or API gateway protection, deployment slots or blue/green rollout, regional recovery, and a controlled deployment network. This Terraform module rejects `enable_public_network_access = false` because it does not provision the required private networking.
 
@@ -132,7 +133,7 @@ POST /api/v1/mcp
 POST /api/v1/chat
 ```
 
-`POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. JSON-RPC batches are supported; notifications receive no response body. The versionless `/mcp` route is retained as an alias. The old REST routes are removed.
+`POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. The versionless `/mcp` route is retained as an alias. Clients must call `initialize` first and send the returned `Mcp-Session-Id` header on subsequent requests. JSON-RPC batches are supported up to 20 requests; notifications receive no response body. The old `/mcp/tools` and `/mcp/tools/call` REST routes are removed.
 
 Example tool listing request:
 
@@ -216,7 +217,7 @@ az provider register --namespace Microsoft.KeyVault --wait
 
 ## Build and Publish the Gateway Image
 
-The GitHub Actions workflow in `.github/workflows/gateway-image.yml` builds the image from `src/gateway/Dockerfile` and publishes it to GHCR on pushes to `main` and version tags.
+The GitHub Actions workflow in `.github/workflows/gateway-image.yml` builds the image from `src/gateway/Dockerfile` and publishes it to GHCR after successful tests on pushes to `main`.
 
 For a local build using an immutable commit tag:
 
@@ -235,11 +236,7 @@ docker push ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>
 
 The Container App can pull a public image without registry credentials. For a private GHCR package, add a Container Apps registry configuration with a read-only package token; do not put that token in committed Terraform files.
 
-The workflow publishes SHA tags for traceability, then promotes the built digest to `release` and deploys the digest. Operators should use an image digest for a deterministic manual deployment:
-
-```text
-ghcr.io/<GITHUB_OWNER>/<REPOSITORY>@sha256:<DIGEST>
-```
+The workflow publishes immutable SHA tags for traceability. The manual deployment workflow accepts those `sha-<commit-sha>` tags and deploys the selected image after the `production` environment gate.
 
 ## Terraform Deployment
 
@@ -578,10 +575,12 @@ Common causes:
 
 ### Frontend reports Gateway offline or Failed to fetch
 
-Test the gateway directly:
+Test the gateway's MCP handshake directly:
 
 ```bash
-curl -i "$(terraform output -raw gateway_app_url)/mcp/tools"
+curl -i -X POST "$(terraform output -raw gateway_app_url)/api/v1/mcp" \
+	-H 'Content-Type: application/json' \
+	--data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
 ```
 
 Check that:
@@ -607,6 +606,14 @@ Run backend tests:
 
 ```bash
 dotnet test src/gateway.test/gateway.test.csproj
+```
+
+Run frontend tests:
+
+```bash
+cd src/gateway.frontend
+npm ci
+npm test -- --run
 ```
 
 Build the frontend:

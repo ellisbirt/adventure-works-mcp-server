@@ -1,4 +1,3 @@
-// src/gateway/Data/Repositories/SecureCustomerRepository.cs
 using System.Text.Json;
 
 namespace EnterpriseAiGateway.Data.Repositories;
