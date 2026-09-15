@@ -61,13 +61,27 @@ public sealed class McpChatService : IMcpChatService
 
     private static McpToolSelection ParseSelection(string route)
     {
-        using var document = JsonDocument.Parse(route);
+        using var document = JsonDocument.Parse(StripMarkdownCodeFence(route));
         var root = document.RootElement;
         return new McpToolSelection(
             root.GetProperty("tool").GetString() ?? string.Empty,
             root.TryGetProperty("schema", out var schema) ? schema.GetString() : null,
             root.TryGetProperty("table", out var table) ? table.GetString() : null,
             root.TryGetProperty("limit", out var limit) && limit.TryGetInt32(out var value) ? value : null);
+    }
+
+    // Some models wrap JSON responses in a ```json fence despite being told not to; strip one if present.
+    private static string StripMarkdownCodeFence(string text)
+    {
+        var trimmed = text.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal)) return trimmed;
+
+        var firstNewline = trimmed.IndexOf('\n');
+        if (firstNewline < 0) return trimmed;
+
+        var withoutOpeningFence = trimmed[(firstNewline + 1)..];
+        var closingFenceIndex = withoutOpeningFence.LastIndexOf("```", StringComparison.Ordinal);
+        return (closingFenceIndex >= 0 ? withoutOpeningFence[..closingFenceIndex] : withoutOpeningFence).Trim();
     }
 
     private record McpToolSelection(string Tool, string? Schema, string? Table, int? Limit);
