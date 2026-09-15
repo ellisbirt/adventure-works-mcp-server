@@ -52,7 +52,7 @@ public class AnthropicClient : IAnthropicClient
         IHttpClientFactory httpClientFactory,
         ILogger<AnthropicClient> logger,
         string apiKey,
-        string model = "claude-3-5-sonnet-20241022",
+        string model = "claude-sonnet-5",
         int maxTokens = 1024,
         int requestTimeoutSeconds = 30)
     {

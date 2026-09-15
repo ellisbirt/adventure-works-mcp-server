@@ -89,7 +89,7 @@ variable "anthropic_secret_name" {
 variable "anthropic_model" {
   description = "Anthropic model used by the gateway."
   type        = string
-  default     = "claude-3-5-sonnet-20241022"
+  default     = "claude-sonnet-5"
 }
 
 variable "anthropic_max_tokens" {
