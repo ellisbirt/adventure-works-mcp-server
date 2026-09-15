@@ -64,31 +64,9 @@ jobs:
           VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
         run: npm run build
 
-  infrastructure:
-    name: Validate infrastructure
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Check Terraform formatting
-        working-directory: infrastructure
-        run: terraform fmt -check -recursive
-
-      - name: Initialize Terraform without backend
-        working-directory: infrastructure
-        run: terraform init -backend=false -input=false
-
-      - name: Validate Terraform
-        working-directory: infrastructure
-        run: terraform validate
-
   image:
     name: Build and publish GHCR image
-    needs: [test, infrastructure]
+    needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -131,11 +109,35 @@ jobs:
       - name: Publish image reference
         run: |
           echo "Published image: ${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA}"
-          echo "Use this Terraform value: -var=gateway_container_image=${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA}"
+
+  build:
+    name: Build
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote image to release
+        run: |
+          docker buildx imagetools create \
+            --tag "${{ env.IMAGE_NAME }}:release" \
+            "${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA}"
 
   frontend:
     name: Publish frontend to Azure Blob Static Website
-    needs: [test, infrastructure, deploy]
+    needs: [test, deploy]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -193,25 +195,14 @@ jobs:
             --overwrite
 
   deploy:
-    name: Deploy gateway image with Terraform
-    needs: [image, infrastructure]
+    name: Deploy gateway image
+    needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    env:
-      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      TF_VAR_entra_admin_login_username: ${{ vars.ENTRA_ADMIN_LOGIN_USERNAME }}
-      TF_VAR_entra_admin_object_id: ${{ vars.ENTRA_ADMIN_OBJECT_ID }}
-      TF_VAR_gateway_container_image: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
-      TF_VAR_external_id_authority: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
-      TF_VAR_external_id_api_audience: ${{ vars.ENTRA_EXTERNAL_ID_API_AUDIENCE }}
-      TF_VAR_external_id_spa_client_id: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
       - name: Login to Azure with OIDC
         uses: azure/login@v2
         with:
@@ -219,17 +210,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Initialize Terraform backend
-        working-directory: infrastructure
-        env:
-          ARM_USE_AZUREAD: true
-        run: terraform init -upgrade -input=false
-
-      - name: Apply gateway image deployment
-        working-directory: infrastructure
-        env:
-          ARM_USE_AZUREAD: true
-        run: terraform apply -input=false -auto-approve -lock-timeout=10m
+      - name: Update Container App image
+        run: |
+          az containerapp update \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ env.IMAGE_NAME }}:release" \
+            --revision-suffix "sha-${{ github.sha }}"

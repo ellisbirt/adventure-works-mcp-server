@@ -207,7 +207,7 @@ resource "azurerm_container_app" "gateway" {
 
     container {
       name   = "gateway"
-      image  = var.gateway_container_image
+      image  = "ghcr.io/ellisbirt/adventure-works-mcp-server:release"
       cpu    = var.container_cpu
       memory = var.container_memory
 
@@ -223,7 +223,7 @@ resource "azurerm_container_app" "gateway" {
       readiness_probe {
         transport               = "HTTP"
         port                    = 8080
-        path                    = "/health"
+        path                    = "/health/ready"
         interval_seconds        = 10
         timeout                 = 5
         failure_count_threshold = 3

@@ -56,16 +56,6 @@ variable "container_app_name" {
   default     = "aca-enterprise-ai-gateway-prod"
 }
 
-variable "gateway_container_image" {
-  description = "Immutable gateway image reference using a SHA tag or digest. Mutable tags such as latest are rejected."
-  type        = string
-
-  validation {
-    condition     = can(regex("(@sha256:[0-9a-f]{64}|:sha-[0-9a-f]{40})$", var.gateway_container_image))
-    error_message = "gateway_container_image must end with an immutable @sha256 digest or :sha-<40 character commit SHA> tag."
-  }
-}
-
 variable "container_cpu" {
   description = "Container Apps vCPU allocation."
   type        = number

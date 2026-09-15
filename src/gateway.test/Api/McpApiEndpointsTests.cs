@@ -91,6 +91,14 @@ public class McpApiEndpointsTests : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
+    [Fact]
+    public async Task Readiness_ReturnsServiceUnavailableWhenAnthropicSecretIsMissing()
+    {
+        var response = await _client.GetAsync("/health/ready");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
     #region GET /mcp/tools Tests
 
     [Fact]

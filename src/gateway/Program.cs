@@ -111,6 +111,34 @@ app.UseRateLimiter();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .ExcludeFromDescription();
 
+app.MapGet("/health/ready", async (
+    AdventureWorksDbContext db,
+    IConfiguration configuration,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var databaseReady = false;
+    try
+    {
+        databaseReady = await db.Database.CanConnectAsync(cancellationToken);
+    }
+    catch (Exception exception)
+    {
+        logger.LogWarning(exception, "Gateway readiness database check failed.");
+    }
+
+    var secretReady = !app.Environment.IsProduction() ||
+        !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]);
+    if (!databaseReady || !secretReady)
+    {
+        return Results.Json(
+            new { status = "unready", database = databaseReady, anthropic = secretReady },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    return Results.Ok(new { status = "ready", database = true, anthropic = true });
+}).ExcludeFromDescription();
+
 string GetRateLimitPartitionKey(HttpContext context) =>
     context.User.FindFirst("sub")?.Value ??
     context.User.FindFirst("oid")?.Value ??

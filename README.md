@@ -96,7 +96,7 @@ flowchart TD
 flowchart LR
 	Commit[Push to main or version tag] --> Tests[Backend tests + frontend build]
 	Tests --> Image[Build gateway Docker image]
-	Image --> GHCR[Push SHA/latest/version tags to GHCR]
+	Image --> GHCR[Push immutable SHA/version tags to GHCR]
 	Tests --> WebBuild[Build frontend with deployed gateway URL]
 	WebBuild --> Blob[Upload dist to Blob $web container]
 	AzureLogin[GitHub OIDC] --> Blob
@@ -115,7 +115,7 @@ The public sample deliberately omits private networking to avoid fixed networkin
 5. Restricted CORS origins and ingress rules.
 6. Separate subscriptions/resource groups and least-privilege deployment identities.
 7. Encrypted remote Terraform state with state locking and controlled access.
-8. Immutable image digests rather than the mutable `latest` tag.
+8. Immutable image references managed by the release pipeline rather than Terraform.
 
 ### Gateway API
 
@@ -285,7 +285,6 @@ Edit `terraform.tfvars` and set:
 subscription_id            = "<SUBSCRIPTION_ID>"
 entra_admin_login_username = "<ENTRA_ADMIN_LOGIN>"
 entra_admin_object_id      = "<ENTRA_ADMIN_OBJECT_ID>"
-gateway_container_image    = "ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>"
 enable_public_network_access = true
 external_id_authority        = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
 external_id_api_audience     = "<gateway-api-client-id>"
@@ -319,7 +318,6 @@ terraform apply -lock-timeout=10m \
 	-var="subscription_id=$(az account show --query id -o tsv)" \
 	-var="entra_admin_login_username=<ENTRA_ADMIN_LOGIN>" \
 	-var="entra_admin_object_id=$(az ad signed-in-user show --query id -o tsv)" \
-	-var="gateway_container_image=ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>" \
 	-var="enable_public_network_access=true"
 ```
 
@@ -446,8 +444,11 @@ The workflow has four jobs:
 
 - `test`: .NET tests and frontend build.
 - `image`: GHCR image build and push.
-- `deploy`: Terraform applies the immutable image reference after the image is published.
+- `Build`: promotes the successfully published SHA image to the `release` tag.
+- `deploy`: Azure Container Apps updates the running app to the `release` image.
 - `frontend`: Blob Static Website build and upload after the gateway deployment.
+
+Terraform is used for infrastructure provisioning and is not run by this release workflow. It references the same `release` image channel that the workflow promotes and deploys.
 
 Configure these repository variables:
 
@@ -457,12 +458,9 @@ AZURE_TENANT_ID
 AZURE_SUBSCRIPTION_ID
 AZURE_RESOURCE_GROUP
 GATEWAY_APP_NAME
-ENTRA_ADMIN_LOGIN_USERNAME
-ENTRA_ADMIN_OBJECT_ID
 FRONTEND_STORAGE_ACCOUNT
 GATEWAY_URL
 ENTRA_EXTERNAL_ID_AUTHORITY
-ENTRA_EXTERNAL_ID_API_AUDIENCE
 ENTRA_EXTERNAL_ID_SPA_CLIENT_ID
 ENTRA_EXTERNAL_ID_API_SCOPE
 ```
@@ -647,7 +645,9 @@ Fix: Make Terraform or a release workflow update the frontend variable automatic
 This is by design on this low-cost showcase
 
 # Container reference
-Terraform requires an immutable `:sha-<COMMIT_SHA>` tag or `@sha256:<DIGEST>`. This keeps releases reproducible and makes rollback references unambiguous.
+Terraform references `ghcr.io/ellisbirt/adventure-works-mcp-server:release`. After the gateway image build succeeds, the `Build` workflow job promotes that immutable `:sha-<COMMIT_SHA>` image to the mutable `:release` channel. The deploy job then updates Container Apps with `:release` and uses the SHA in its revision suffix.
+
+Terraform does not run in the release workflow. To roll back, promote a previously published SHA image to `:release` and deploy a new Container App revision.
 
 # Operational resilience
 This is a single instance running on the lowest possible SKUs  A production system would be through Azure Front Door and use a more resilient SKU, Probably App Service Containers with deployment slots and, if resilience is important, mirroring

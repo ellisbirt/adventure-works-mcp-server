@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Http.Resilience;
+using Polly;
 
 namespace EnterpriseAiGateway.Integration.Anthropic;
 
@@ -47,9 +49,18 @@ public static class AnthropicServiceCollectionExtensions
             // HttpClient base configuration (headers added per-request in AnthropicClient)
             client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
         })
-        // Add resilience policies (retry, circuit breaker) if needed
-        // .AddTransientHttpErrorPolicy()...
-        ;
+        .AddStandardResilienceHandler(options =>
+        {
+            options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+            options.Retry.MaxRetryAttempts = 3;
+            options.Retry.Delay = TimeSpan.FromSeconds(1);
+            options.Retry.BackoffType = DelayBackoffType.Exponential;
+            options.Retry.UseJitter = true;
+            options.CircuitBreaker.FailureRatio = 0.5;
+            options.CircuitBreaker.MinimumThroughput = 5;
+            options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+            options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+        });
 
         // Register AnthropicClient as singleton (thread-safe, stateless service)
         services.AddSingleton<IAnthropicClient>(provider =>
