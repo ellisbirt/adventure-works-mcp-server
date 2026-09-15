@@ -102,7 +102,9 @@ public class AnthropicClient : IAnthropicClient
             var request = new AnthropicMessageRequest(
                 Model: _anthropicModel,
                 MaxTokens: _maxTokens,
-                System: systemPromptObject,
+                // Anthropic requires "system" to be an array of content blocks (not a bare
+                // object) whenever a block carries cache_control.
+                System: new List<AnthropicSystemPrompt> { systemPromptObject },
                 Messages: new List<AnthropicUserMessage> { userMessage }
             );
 
