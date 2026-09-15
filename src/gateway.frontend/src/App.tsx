@@ -23,6 +23,25 @@ type TableDefinition = {
   columns: string[]
 }
 
+function parseTableCatalog(value: unknown): TableDefinition[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const table = item as Record<string, unknown>
+    const schema = table.schema ?? table.Schema
+    const name = table.name ?? table.Name
+    const columns = table.columns ?? table.Columns
+    if (typeof schema !== 'string' || typeof name !== 'string') return []
+
+    return [{
+      schema,
+      name,
+      columns: Array.isArray(columns) ? columns.filter((column): column is string => typeof column === 'string') : [],
+    }]
+  })
+}
+
 type ChatResponse = {
   message: string
   tool: string
@@ -90,7 +109,7 @@ function App() {
         })
         if (!catalogResponse.ok) throw new Error('Gateway unavailable')
         const catalogData = await catalogResponse.json() as CallResponse
-        const catalog = JSON.parse(catalogData.content?.[0]?.text ?? '[]') as TableDefinition[]
+        const catalog = parseTableCatalog(JSON.parse(catalogData.content?.[0]?.text ?? '[]'))
         setTables(catalog)
         setSelectedTable(catalog[0] ? `${catalog[0].schema}.${catalog[0].name}` : '')
       } catch {

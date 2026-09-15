@@ -5,10 +5,16 @@ import './index.css'
 import App from './App.tsx'
 import { msalInstance } from './auth.ts'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <MsalProvider instance={msalInstance}>
-      <App />
-    </MsalProvider>
-  </StrictMode>,
-)
+async function bootstrap() {
+  await msalInstance.initialize()
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <MsalProvider instance={msalInstance}>
+        <App />
+      </MsalProvider>
+    </StrictMode>,
+  )
+}
+
+void bootstrap()
