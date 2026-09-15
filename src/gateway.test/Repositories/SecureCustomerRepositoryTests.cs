@@ -146,8 +146,11 @@ public class SecureCustomerRepositoryTests : IDisposable
             .And.Contain("[REDACTED_PHONE]")
             .And.NotContain("alice.williams@cloudsystems.io")
             .And.NotContain("555-654-3210")
-            .And.Contain("Alice")
-            .And.Contain("Williams");
+            .And.NotContain("Alice")
+            .And.NotContain("Williams")
+            .And.NotContain("CloudSystems")
+            .And.Contain("[REDACTED_NAME]")
+            .And.Contain("[REDACTED_COMPANY]");
     }
 
     [Fact]
@@ -177,7 +180,7 @@ public class SecureCustomerRepositoryTests : IDisposable
         // Assert
         result.Should()
             .NotBeNullOrEmpty()
-            .And.Contain("Charlie")
+            .And.Contain("[REDACTED_NAME]")
             .And.Contain("[REDACTED_PHONE]");
     }
 
@@ -209,7 +212,7 @@ public class SecureCustomerRepositoryTests : IDisposable
         result.Should()
             .NotBeNullOrEmpty()
             .And.Contain("[REDACTED_EMAIL]")
-            .And.Contain("Diana");
+            .And.Contain("[REDACTED_NAME]");
     }
 
     [Fact]
@@ -239,7 +242,7 @@ public class SecureCustomerRepositoryTests : IDisposable
         // Assert
         result.Should()
             .NotBeNullOrEmpty()
-            .And.Contain("Eve")
+            .And.Contain("[REDACTED_NAME]")
             .And.Contain("[REDACTED_PHONE]");
     }
 

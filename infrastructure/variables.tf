@@ -57,8 +57,13 @@ variable "container_app_name" {
 }
 
 variable "gateway_container_image" {
-  description = "Container image for the gateway, published to a public or authenticated registry."
+  description = "Immutable gateway image reference using a SHA tag or digest. Mutable tags such as latest are rejected."
   type        = string
+
+  validation {
+    condition     = can(regex("(@sha256:[0-9a-f]{64}|:sha-[0-9a-f]{40})$", var.gateway_container_image))
+    error_message = "gateway_container_image must end with an immutable @sha256 digest or :sha-<40 character commit SHA> tag."
+  }
 }
 
 variable "container_cpu" {

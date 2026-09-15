@@ -55,6 +55,11 @@ function correlationId() {
   return crypto.randomUUID()
 }
 
+async function readJson<T>(response: Response): Promise<T | null> {
+  const body = await response.text()
+  return body ? JSON.parse(body) as T : null
+}
+
 function App() {
   const { accounts, instance } = useMsal()
   const isAuthenticated = useIsAuthenticated()
@@ -142,9 +147,9 @@ function App() {
         },
         body: JSON.stringify({ name: 'read_database_table', arguments: { schema, table, limit } }),
       })
-      const data = (await response.json()) as CallResponse
-        if (!response.ok) throw new Error('Gateway unavailable')
-      if (!response.ok || data.isError) throw new Error(data.content?.[0]?.text ?? 'The gateway rejected this request.')
+      const data = await readJson<CallResponse>(response)
+      if (!response.ok) throw new Error(`Gateway rejected the request (${response.status}).`)
+      if (!data || data.isError) throw new Error(data?.content?.[0]?.text ?? 'The gateway rejected this request.')
       setResult(data.content?.[0]?.text ?? 'No customer context returned.')
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to reach the gateway.')
@@ -169,9 +174,9 @@ function App() {
         headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
         body: JSON.stringify({ message: chatMessage.trim() }),
       })
-      const data = (await response.json()) as ChatResponse | { error?: string }
-      if (!response.ok || !('message' in data)) {
-        const errorMessage = 'error' in data ? data.error : undefined
+      const data = await readJson<ChatResponse | { error?: string }>(response)
+      if (!response.ok || !data || !('message' in data)) {
+        const errorMessage = data && 'error' in data ? data.error : undefined
         throw new Error(errorMessage ?? 'The database assistant is unavailable.')
       }
       setChatResponse(data)

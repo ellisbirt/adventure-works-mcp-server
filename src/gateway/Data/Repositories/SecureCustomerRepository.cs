@@ -17,7 +17,7 @@ public interface ISecureCustomerRepository
     /// </summary>
     /// <param name="customerId">The unique customer identifier from AdventureWorks dataset</param>
     /// <param name="maskSensitiveData">
-    /// When true, applies regex-based redaction to EmailAddress and Phone properties
+    /// When true, redacts direct identifiers and applies regex-based redaction to EmailAddress and Phone properties
     /// to prevent sensitive data leakage into AI model context windows
     /// </param>
     /// <returns>
@@ -102,6 +102,9 @@ public class SecureCustomerRepository : ISecureCustomerRepository
         }
 
         // Pre-allocate mutable copies to avoid modifying source customer properties
+        var firstName = customer.FirstName;
+        var lastName = customer.LastName;
+        var companyName = customer.CompanyName;
         var email = customer.EmailAddress;
         var phone = customer.Phone;
 
@@ -109,6 +112,9 @@ public class SecureCustomerRepository : ISecureCustomerRepository
         // String.IsNullOrEmpty guards prevent regex allocation for null/empty properties
         if (maskSensitiveData)
         {
+            firstName = "[REDACTED_NAME]";
+            lastName = "[REDACTED_NAME]";
+            companyName = "[REDACTED_COMPANY]";
             email = !string.IsNullOrEmpty(email) 
                 ? EmailRegex.Replace(email, "[REDACTED_EMAIL]") 
                 : email;
@@ -120,6 +126,6 @@ public class SecureCustomerRepository : ISecureCustomerRepository
 
         // Return formatted text summary suitable for LLM model context window consumption
         // Pipe-delimited format ensures easy parsing by downstream AI prompt injectors
-        return $"Customer Entity Record Detected -> ID: {customer.CustomerId} | Name: {customer.FirstName} {customer.LastName} | Company: {customer.CompanyName} | Contact: {phone} / {email}";
+        return $"Customer Entity Record Detected -> ID: {customer.CustomerId} | Name: {firstName} {lastName} | Company: {companyName} | Contact: {phone} / {email}";
     }
 }

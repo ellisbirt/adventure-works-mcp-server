@@ -10,6 +10,7 @@ on:
     paths:
       - 'src/gateway/**'
       - 'src/gateway.test/**'
+      - 'infrastructure/**'
       - '.github/workflows/gateway-image.yml'
   workflow_dispatch:
 
@@ -63,9 +64,31 @@ jobs:
           VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
         run: npm run build
 
+  infrastructure:
+    name: Validate infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        working-directory: infrastructure
+        run: terraform fmt -check -recursive
+
+      - name: Initialize Terraform without backend
+        working-directory: infrastructure
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform
+        working-directory: infrastructure
+        run: terraform validate
+
   image:
     name: Build and publish GHCR image
-    needs: test
+    needs: [test, infrastructure]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -92,7 +115,6 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
 
       - name: Build and push gateway image
@@ -113,7 +135,7 @@ jobs:
 
   frontend:
     name: Publish frontend to Azure Blob Static Website
-    needs: test
+    needs: [test, infrastructure, deploy]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -130,6 +152,24 @@ jobs:
           cache: npm
           cache-dependency-path: src/gateway.frontend/package-lock.json
 
+      - name: Login to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve deployed gateway URL
+        id: gateway
+        run: |
+          gateway_fqdn=$(az containerapp show \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query 'properties.configuration.ingress.fqdn' \
+            --output tsv)
+          test -n "$gateway_fqdn"
+          echo "url=https://$gateway_fqdn" >> "$GITHUB_OUTPUT"
+
       - name: Install frontend dependencies
         working-directory: src/gateway.frontend
         run: npm ci
@@ -137,18 +177,11 @@ jobs:
       - name: Build frontend for Azure
         working-directory: src/gateway.frontend
         env:
-          VITE_GATEWAY_URL: ${{ vars.GATEWAY_URL }}
+          VITE_GATEWAY_URL: ${{ steps.gateway.outputs.url }}
           VITE_ENTRA_AUTHORITY: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
           VITE_ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
           VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
         run: npm run build
-
-      - name: Login to Azure with OIDC
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Upload frontend assets
         run: |
@@ -158,3 +191,45 @@ jobs:
             --source src/gateway.frontend/dist \
             --auth-mode login \
             --overwrite
+
+  deploy:
+    name: Deploy gateway image with Terraform
+    needs: [image, infrastructure]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_entra_admin_login_username: ${{ vars.ENTRA_ADMIN_LOGIN_USERNAME }}
+      TF_VAR_entra_admin_object_id: ${{ vars.ENTRA_ADMIN_OBJECT_ID }}
+      TF_VAR_gateway_container_image: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+      TF_VAR_external_id_authority: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
+      TF_VAR_external_id_api_audience: ${{ vars.ENTRA_EXTERNAL_ID_API_AUDIENCE }}
+      TF_VAR_external_id_spa_client_id: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Login to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Initialize Terraform backend
+        working-directory: infrastructure
+        env:
+          ARM_USE_AZUREAD: true
+        run: terraform init -upgrade -input=false
+
+      - name: Apply gateway image deployment
+        working-directory: infrastructure
+        env:
+          ARM_USE_AZUREAD: true
+        run: terraform apply -input=false -auto-approve -lock-timeout=10m

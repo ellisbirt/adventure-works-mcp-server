@@ -21,6 +21,8 @@ var authenticationAudience = builder.Configuration["Authentication:Audience"];
 var authenticationScope = builder.Configuration["Authentication:RequiredScope"] ?? "access_as_user";
 var authenticationRequired = builder.Configuration.GetValue<bool>("Authentication:Enabled");
 var authenticationEnabled = !string.IsNullOrWhiteSpace(authenticationAuthority) && !string.IsNullOrWhiteSpace(authenticationAudience);
+if (builder.Environment.IsProduction() && !authenticationRequired)
+    throw new InvalidOperationException("Authentication:Enabled must be true in Production.");
 if (authenticationRequired && !authenticationEnabled)
     throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when authentication is enabled.");
 
@@ -105,6 +107,9 @@ if (authenticationRequired)
     app.UseAuthorization();
 }
 app.UseRateLimiter();
+
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+    .ExcludeFromDescription();
 
 string GetRateLimitPartitionKey(HttpContext context) =>
     context.User.FindFirst("sub")?.Value ??
@@ -250,9 +255,9 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         {
             return Results.Json(new { error = "The AI returned an invalid MCP tool selection." }, statusCode: StatusCodes.Status502BadGateway);
         }
-        catch (InvalidOperationException exception)
+        catch (InvalidOperationException)
         {
-            return Results.Json(new { error = exception.Message }, statusCode: StatusCodes.Status502BadGateway);
+            return Results.Json(new { error = "The database assistant could not complete the request." }, statusCode: StatusCodes.Status502BadGateway);
         }
         catch (HttpRequestException)
         {

@@ -4,8 +4,8 @@ using System.Text.Json.Serialization;
 namespace EnterpriseAiGateway.Core.DTOs;
 
 /// <summary>
-/// Strongly-typed C# records implementing the Model Context Protocol (MCP) JSON-RPC specification.
-/// All records use System.Text.Json attributes for direct Minimal API parsing without controller boilerplate.
+/// Strongly-typed C# records for the gateway's MCP-shaped REST compatibility contract.
+/// These records are not the MCP JSON-RPC protocol envelope.
 /// </summary>
 
 /// <summary>
@@ -22,8 +22,7 @@ public record McpToolDefinition(
 );
 
 /// <summary>
-/// Protocol compliance response wrapper for MCP tools/list endpoint.
-/// Returns the complete set of available tools for LLM tool discovery.
+/// Response wrapper for the gateway's REST tools listing endpoint.
 /// </summary>
 /// <param name="Tools">List of all available tool definitions</param>
 public record McpListToolsResponse(

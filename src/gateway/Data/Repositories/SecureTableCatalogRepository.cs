@@ -16,11 +16,17 @@ public interface ISecureTableCatalogRepository
 
 public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 {
-    private static readonly HashSet<string> SensitiveColumns = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> AllowedColumns = new(StringComparer.OrdinalIgnoreCase)
     {
-        "AddressLine1", "AddressLine2", "City", "CountryRegion", "EmailAddress", "FirstName",
-        "LastName", "MiddleName", "PasswordHash", "PasswordSalt", "Phone", "PostalCode",
-        "StateProvince", "Suffix", "Title"
+        "AddressID", "AccountNumber", "Color", "Comment", "CountryRegionCode", "Culture",
+        "CustomerID", "Description", "DiscontinuedDate", "DueDate", "Freight", "LineTotal",
+        "ListPrice", "ModifiedDate", "Name", "NoOfYears", "OnlineOrderFlag", "OrderDate",
+        "OrderQty", "ParentProductCategoryID", "ParentProductCategoryName", "ProductCategoryID",
+        "ProductID", "ProductLine", "ProductModel", "ProductModelID", "ProductNumber",
+        "PurchaseOrderNumber", "RevisionNumber", "SalesOrderDetailID", "SalesOrderID",
+        "SalesOrderNumber", "SellEndDate", "SellStartDate", "ShipDate", "ShipMethod", "Size",
+        "StandardCost", "Status", "Style", "SubTotal", "Summary", "TaxAmt", "TotalDue",
+        "UnitPrice", "UnitPriceDiscount", "WarrantyPeriod", "Weight"
     };
 
     private readonly AdventureWorksDbContext _context;
@@ -56,7 +62,7 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
             }
 
             var column = reader.GetString(2);
-            if (!IsSensitiveColumn(column)) columns.Add(column);
+            if (IsAllowedColumn(column)) columns.Add(column);
         }
 
         return tables
@@ -101,22 +107,8 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 
     public static bool IsSensitiveColumn(string columnName)
     {
-        if (SensitiveColumns.Contains(columnName)) return true;
-
-        var normalizedName = columnName.Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
-        return normalizedName.Contains("address", StringComparison.Ordinal) ||
-               normalizedName.Contains("birth", StringComparison.Ordinal) ||
-               normalizedName.Contains("card", StringComparison.Ordinal) ||
-               normalizedName.Contains("email", StringComparison.Ordinal) ||
-               normalizedName.Contains("password", StringComparison.Ordinal) ||
-               normalizedName.Contains("phone", StringComparison.Ordinal) ||
-               normalizedName.Contains("postal", StringComparison.Ordinal) ||
-               normalizedName.Contains("secret", StringComparison.Ordinal) ||
-               normalizedName.Contains("socialsecurity", StringComparison.Ordinal) ||
-               normalizedName.Contains("ssn", StringComparison.Ordinal) ||
-               normalizedName.Contains("token", StringComparison.Ordinal) ||
-               normalizedName.Contains("username", StringComparison.Ordinal) ||
-               normalizedName.Contains("ipaddress", StringComparison.Ordinal) ||
-               normalizedName.Contains("bankaccount", StringComparison.Ordinal);
+        return !IsAllowedColumn(columnName);
     }
+
+    public static bool IsAllowedColumn(string columnName) => AllowedColumns.Contains(columnName);
 }

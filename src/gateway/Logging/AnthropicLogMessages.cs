@@ -7,8 +7,8 @@ internal static partial class AnthropicLogMessages
     [LoggerMessage(LogLevel.Trace, "Sending message to Anthropic API with system prompt caching enabled. Model: {Model}")]
     public static partial void SendingMessage(ILogger logger, string model);
 
-    [LoggerMessage(LogLevel.Error, "Anthropic API error: {StatusCode} - {ErrorContent}")]
-    public static partial void ApiError(ILogger logger, int statusCode, string errorContent);
+    [LoggerMessage(LogLevel.Error, "Anthropic API error: {StatusCode}; response body length={ErrorBodyLength}")]
+    public static partial void ApiError(ILogger logger, int statusCode, int errorBodyLength);
 
     [LoggerMessage(LogLevel.Information, "Anthropic API usage: InputTokens={InputTokens}, OutputTokens={OutputTokens}, CacheCreation={CacheCreation}, CacheRead={CacheRead}")]
     public static partial void Usage(ILogger logger, int inputTokens, int outputTokens, int cacheCreation, int cacheRead);

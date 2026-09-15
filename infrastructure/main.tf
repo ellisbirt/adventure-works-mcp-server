@@ -202,14 +202,32 @@ resource "azurerm_container_app" "gateway" {
   }
 
   template {
-    min_replicas = 0
-    max_replicas = 1
+    min_replicas = 1
+    max_replicas = 2
 
     container {
       name   = "gateway"
       image  = var.gateway_container_image
       cpu    = var.container_cpu
       memory = var.container_memory
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health"
+        interval_seconds        = 30
+        timeout                 = 5
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health"
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+      }
 
       env {
         name  = "ASPNETCORE_ENVIRONMENT"

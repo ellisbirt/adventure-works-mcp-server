@@ -1,6 +1,6 @@
 # Enterprise AI Gateway
 
-An end-to-end portfolio sample showing a React frontend, a .NET 8 MCP gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
+An end-to-end portfolio sample showing a React frontend, a .NET 8 MCP-shaped gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ The default deployment is intentionally public and low-cost:
 | Layer | Azure resource | Responsibility |
 | --- | --- | --- |
 | Frontend | Blob Static Website | Serves the compiled Vite/React application. |
-| API | Container Apps Consumption | Runs the .NET gateway with scale-to-zero capability. |
+| API | Container Apps Consumption | Runs the .NET gateway with health probes and limited horizontal scaling. |
 | Container image | GHCR | Stores and distributes the gateway image. |
 | Data | Azure SQL serverless database | Stores and queries the AdventureWorksLT sample data. |
 | Secret store | Azure Key Vault | Stores the Anthropic API key outside Terraform state. |
@@ -34,7 +34,7 @@ The default deployment is intentionally public and low-cost:
 
 ### Runtime Request Flow
 
-The gateway provides governed, read-only database access. The chat endpoint uses Claude only after an MCP tool result has been retrieved:
+The gateway provides governed, read-only database access. Its current `/mcp/*` surface is a REST compatibility API; it is not a JSON-RPC MCP server. The chat endpoint uses Claude only after a tool result has been retrieved:
 
 ```mermaid
 sequenceDiagram
@@ -97,7 +97,7 @@ flowchart LR
 	Commit[Push to main or version tag] --> Tests[Backend tests + frontend build]
 	Tests --> Image[Build gateway Docker image]
 	Image --> GHCR[Push SHA/latest/version tags to GHCR]
-	Tests --> WebBuild[Build frontend with GATEWAY_URL]
+	Tests --> WebBuild[Build frontend with deployed gateway URL]
 	WebBuild --> Blob[Upload dist to Blob $web container]
 	AzureLogin[GitHub OIDC] --> Blob
 ```
@@ -214,11 +214,11 @@ az provider register --namespace Microsoft.KeyVault --wait
 
 The GitHub Actions workflow in `.github/workflows/gateway-image.yml` builds the image from `src/gateway/Dockerfile` and publishes it to GHCR on pushes to `main` and version tags.
 
-For a local build:
+For a local build using an immutable commit tag:
 
 ```bash
 docker build \
-	--tag ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest \
+	--tag ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA> \
 	./src/gateway
 ```
 
@@ -226,7 +226,7 @@ For a public GHCR package, push after authenticating with a GitHub token that ha
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "<GITHUB_OWNER>" --password-stdin
-docker push ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest
+docker push ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>
 ```
 
 The Container App can pull a public image without registry credentials. For a private GHCR package, add a Container Apps registry configuration with a read-only package token; do not put that token in committed Terraform files.
@@ -285,7 +285,7 @@ Edit `terraform.tfvars` and set:
 subscription_id            = "<SUBSCRIPTION_ID>"
 entra_admin_login_username = "<ENTRA_ADMIN_LOGIN>"
 entra_admin_object_id      = "<ENTRA_ADMIN_OBJECT_ID>"
-gateway_container_image    = "ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest"
+gateway_container_image    = "ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>"
 enable_public_network_access = true
 external_id_authority        = "https://<tenant>.ciamlogin.com/<tenant>.onmicrosoft.com"
 external_id_api_audience     = "<gateway-api-client-id>"
@@ -319,7 +319,7 @@ terraform apply -lock-timeout=10m \
 	-var="subscription_id=$(az account show --query id -o tsv)" \
 	-var="entra_admin_login_username=<ENTRA_ADMIN_LOGIN>" \
 	-var="entra_admin_object_id=$(az ad signed-in-user show --query id -o tsv)" \
-	-var="gateway_container_image=ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:latest" \
+	-var="gateway_container_image=ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>" \
 	-var="enable_public_network_access=true"
 ```
 
@@ -442,11 +442,12 @@ The GitHub Actions workflow performs this upload automatically on pushes to `mai
 
 ## GitHub Actions and Azure OIDC
 
-The workflow has three jobs:
+The workflow has four jobs:
 
 - `test`: .NET tests and frontend build.
 - `image`: GHCR image build and push.
-- `frontend`: Blob Static Website build and upload.
+- `deploy`: Terraform applies the immutable image reference after the image is published.
+- `frontend`: Blob Static Website build and upload after the gateway deployment.
 
 Configure these repository variables:
 
@@ -454,9 +455,14 @@ Configure these repository variables:
 AZURE_CLIENT_ID
 AZURE_TENANT_ID
 AZURE_SUBSCRIPTION_ID
+AZURE_RESOURCE_GROUP
+GATEWAY_APP_NAME
+ENTRA_ADMIN_LOGIN_USERNAME
+ENTRA_ADMIN_OBJECT_ID
 FRONTEND_STORAGE_ACCOUNT
 GATEWAY_URL
 ENTRA_EXTERNAL_ID_AUTHORITY
+ENTRA_EXTERNAL_ID_API_AUDIENCE
 ENTRA_EXTERNAL_ID_SPA_CLIENT_ID
 ENTRA_EXTERNAL_ID_API_SCOPE
 ```
@@ -478,6 +484,8 @@ gh auth login
 gh variable set AZURE_CLIENT_ID --repo <GITHUB_OWNER>/<REPOSITORY> --body "<APP_CLIENT_ID>"
 gh variable set AZURE_TENANT_ID --repo <GITHUB_OWNER>/<REPOSITORY> --body "<TENANT_ID>"
 gh variable set AZURE_SUBSCRIPTION_ID --repo <GITHUB_OWNER>/<REPOSITORY> --body "<SUBSCRIPTION_ID>"
+gh variable set AZURE_RESOURCE_GROUP --repo <GITHUB_OWNER>/<REPOSITORY> --body "<RESOURCE_GROUP_NAME>"
+gh variable set GATEWAY_APP_NAME --repo <GITHUB_OWNER>/<REPOSITORY> --body "<CONTAINER_APP_NAME>"
 gh variable set FRONTEND_STORAGE_ACCOUNT --repo <GITHUB_OWNER>/<REPOSITORY> --body "<STORAGE_ACCOUNT_NAME>"
 gh variable set GATEWAY_URL --repo <GITHUB_OWNER>/<REPOSITORY> --body "<GATEWAY_URL>"
 ```
@@ -579,8 +587,8 @@ curl -i "$(terraform output -raw gateway_app_url)/mcp/tools"
 
 Check that:
 
-- `GATEWAY_URL` points to the current Container App URL.
-- The frontend was rebuilt after changing `GATEWAY_URL`.
+- The workflow resolves the current Container App URL using `AZURE_RESOURCE_GROUP` and `GATEWAY_APP_NAME` before building the frontend.
+- For local builds, `VITE_GATEWAY_URL` points to the current Container App URL.
 - The gateway CORS origin matches `frontend_url`.
 - The Blob Static Website contains the latest `dist` files.
 
@@ -618,15 +626,13 @@ docker build --tag enterprise-ai-gateway:local ./src/gateway
 # adventure-works-mcp-server
 
 # Shortcomings
-## Unauthenticated endpoints
-This is a demonstration project.  Authentiocation is currently excluded to simplify acces for recruiters who want to view the system.
 
-## Public Network Access to Keyvault and the database
-To permit this to run in a _Github Codespace_ and locally through a dynamic address home ISP IP address restrictions are currently disabled. 
+## Public Network Access to Key Vault and the database
+To permit this to run in a _GitHub Codespace_ and locally through a dynamic home ISP address, IP address restrictions are currently disabled.
 
-A future enhancelent would be to ad autonmatic agents to open pinholes for clients running this gateway with a suitabel authentication context.
+A future enhancement would be to add automatic agents to open pinholes for clients running this gateway with a suitable authentication context.
 
-## Anthropic integration is nit showcased.
+## Anthropic integration is not showcased.
 
 ## Frontend deployment can drift from the backend
 The frontend bakes GATEWAY_URL at build time:
@@ -639,3 +645,9 @@ Fix: Make Terraform or a release workflow update the frontend variable automatic
 
 # No security controls on web FE
 This is by design on this low-cost showcase
+
+# Container reference
+Terraform requires an immutable `:sha-<COMMIT_SHA>` tag or `@sha256:<DIGEST>`. This keeps releases reproducible and makes rollback references unambiguous.
+
+# Operational resilience
+This is a single instance running on the lowest possible SKUs  A production system would be through Azure Front Door and use a more resilient SKU, Probably App Service Containers with deployment slots and, if resilience is important, mirroring

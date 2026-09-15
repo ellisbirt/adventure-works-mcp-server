@@ -83,6 +83,14 @@ public class McpApiEndpointsTests : IAsyncLifetime
         await _factory.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Health_ReturnsOkWithoutAuthentication()
+    {
+        var response = await _client.GetAsync("/health");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
     #region GET /mcp/tools Tests
 
     [Fact]

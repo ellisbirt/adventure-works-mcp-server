@@ -22,6 +22,9 @@ public class SecureTableCatalogRepositoryTests
     [InlineData("ApiToken")]
     [InlineData("User_Name")]
     [InlineData("IPAddress")]
+    [InlineData("NationalIdentifier")]
+    [InlineData("DateOfBirthUtc")]
+    [InlineData("FutureSensitiveColumn")]
     public void IsSensitiveColumn_RecognizesPersonalAndCredentialFields(string columnName)
     {
         SecureTableCatalogRepository.IsSensitiveColumn(columnName).Should().BeTrue();
@@ -29,7 +32,6 @@ public class SecureTableCatalogRepositoryTests
 
     [Theory]
     [InlineData("CustomerID")]
-    [InlineData("CompanyName")]
     [InlineData("ProductID")]
     [InlineData("Name")]
     [InlineData("ListPrice")]

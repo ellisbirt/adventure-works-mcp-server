@@ -183,8 +183,8 @@ public class AnthropicClient : IAnthropicClient
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
-                AnthropicLogMessages.ApiError(_logger, (int)response.StatusCode, errorContent);
-                throw new HttpRequestException($"Anthropic API returned {response.StatusCode}: {errorContent}");
+                AnthropicLogMessages.ApiError(_logger, (int)response.StatusCode, errorContent.Length);
+                throw new HttpRequestException($"Anthropic API returned {(int)response.StatusCode}.");
             }
 
             // Deserialize response with usage metrics (including cache hit detection)
