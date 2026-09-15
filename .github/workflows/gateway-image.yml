@@ -117,5 +117,19 @@ jobs:
 
       - name: Publish image reference
         run: |
-          echo "Published image tag: ${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA}"
+          image_tag="sha-${GITHUB_SHA}"
+          echo "Published image tag: ${{ env.IMAGE_NAME }}:$image_tag"
           echo "Published image digest: ${{ steps.push.outputs.digest }}"
+          {
+            echo "### Gateway image published"
+            echo ""
+            echo "Deploy this build from the **Deploy gateway** workflow using:"
+            echo ""
+            echo '```text'
+            echo "$image_tag"
+            echo '```'
+            echo ""
+            echo "Full reference: \`${{ env.IMAGE_NAME }}:$image_tag\`"
+            echo ""
+            echo "Digest: \`${{ steps.push.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

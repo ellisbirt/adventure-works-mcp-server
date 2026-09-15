@@ -20,8 +20,9 @@ public class ChatApiEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         body.Should().NotBeNull();
-        body!.Should().ContainKey("error");
-        var errorMessage = body["error"];
+        var payload = body!;
+        payload.Should().ContainKey("error");
+        var errorMessage = payload["error"];
         errorMessage.Should().NotBeNull();
         errorMessage.Should().Contain("unavailable");
     }

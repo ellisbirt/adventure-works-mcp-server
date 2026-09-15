@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Immutable GHCR tag produced by Gateway CI (for example sha-<commit-sha>)
-        required: true
+        description: Immutable GHCR tag produced by Gateway CI (for example sha-<commit-sha>). Leave blank to deploy the latest successful main build.
+        required: false
         type: string
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 concurrency:
@@ -25,9 +26,27 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - name: Resolve image tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
+        run: |
+          image_tag="$IMAGE_TAG_INPUT"
+          if [[ -z "$image_tag" ]]; then
+            head_sha=$(gh api "repos/${{ github.repository }}/actions/workflows/gateway-image.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty')
+            if [[ -z "$head_sha" ]]; then
+              echo "::error::No successful Gateway CI run found on main; pass image_tag explicitly."
+              exit 1
+            fi
+            image_tag="sha-$head_sha"
+            echo "No image_tag supplied; resolved latest successful main build: $image_tag"
+          fi
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
       - name: Validate image tag
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
         run: |
           [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
 
@@ -38,7 +57,7 @@ jobs:
 
       - name: Checkout selected artifact source
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
         run: |
           commit_sha="${IMAGE_TAG#sha-}"
           git fetch --no-tags origin "$commit_sha"
@@ -54,7 +73,7 @@ jobs:
       - name: Update Container App image tag
         id: gateway
         env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
         run: |
           image="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
           # Container Apps caps app-name + revision-suffix at 54 chars combined, so the
@@ -117,7 +136,7 @@ jobs:
             --revision "$revision"
           {
             echo "### Deployment"
-            echo "- Image: \`${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}\`"
-            echo "- Source commit: \`${{ inputs.image_tag }}\`"
+            echo "- Image: \`${{ env.IMAGE_NAME }}:${{ steps.resolve.outputs.image_tag }}\`"
+            echo "- Source commit: \`${{ steps.resolve.outputs.image_tag }}\`"
             echo "- Revision restarted: \`$revision\`"
           } >> "$GITHUB_STEP_SUMMARY"
