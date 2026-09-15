@@ -4,7 +4,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Data.Repositories;
@@ -100,6 +102,25 @@ public class McpApiEndpointsTests : IAsyncLifetime
         var response = await _client.GetAsync("/health/ready");
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task Readiness_ReturnsReadyWhenDatabaseAndAnthropicConfigurationAreAvailable()
+    {
+        await using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Anthropic:ApiKey"] = "test-key",
+                ["Anthropic:Model"] = "test-model"
+            })));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("readiness").GetBoolean().Should().BeTrue();
+        body.GetProperty("details").GetArrayLength().Should().Be(0);
     }
 
     [Fact]

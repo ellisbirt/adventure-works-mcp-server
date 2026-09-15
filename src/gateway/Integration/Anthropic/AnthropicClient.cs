@@ -198,7 +198,7 @@ public class AnthropicClient : IAnthropicClient
                     throw new AnthropicProviderUnavailableException("Anthropic API is temporarily unavailable.", statusCode: response.StatusCode);
                 }
 
-                throw new HttpRequestException($"Anthropic API returned {(int)response.StatusCode}.");
+                throw new HttpRequestException($"Anthropic API returned {(int)response.StatusCode}.", null, response.StatusCode);
             }
 
             // Deserialize response with usage metrics (including cache hit detection)
@@ -226,6 +226,16 @@ public class AnthropicClient : IAnthropicClient
         {
             AnthropicLogMessages.RequestTimeout(_logger, _requestTimeout.TotalSeconds);
             throw new AnthropicProviderUnavailableException($"Anthropic API request timed out after {_requestTimeout.TotalSeconds}s", ex);
+        }
+        catch (AnthropicProviderUnavailableException ex)
+        {
+            AnthropicLogMessages.HttpError(_logger, ex);
+            throw;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is null)
+        {
+            AnthropicLogMessages.HttpError(_logger, ex);
+            throw new AnthropicProviderUnavailableException("Anthropic API network request failed.", ex);
         }
         catch (HttpRequestException ex)
         {

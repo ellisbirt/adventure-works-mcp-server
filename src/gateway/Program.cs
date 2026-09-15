@@ -108,7 +108,11 @@ if (authenticationRequired)
 }
 app.UseRateLimiter();
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+app.MapGet("/health", () => Results.Ok(new
+{
+    status = "alive",
+    liveness = true
+}))
     .ExcludeFromDescription();
 
 app.MapGet("/health/ready", async (
@@ -127,15 +131,36 @@ app.MapGet("/health/ready", async (
         logger.LogWarning(exception, "Gateway readiness database check failed.");
     }
 
-    var secretReady = !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]);
-    if (!databaseReady || !secretReady)
+    var anthropicReady = !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]) &&
+                         !string.IsNullOrWhiteSpace(configuration["Anthropic:Model"]);
+    var reasons = new List<string>();
+    if (!databaseReady) reasons.Add("database_unreachable");
+    if (!anthropicReady) reasons.Add("anthropic_configuration_missing");
+
+    if (reasons.Count > 0)
     {
         return Results.Json(
-            new { status = "unready", database = databaseReady, anthropic = secretReady },
+            new
+            {
+                status = "not_ready",
+                liveness = true,
+                readiness = false,
+                database = databaseReady,
+                anthropic = anthropicReady,
+                details = reasons
+            },
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    return Results.Ok(new { status = "ready", database = true, anthropic = true });
+    return Results.Ok(new
+    {
+        status = "ready",
+        liveness = true,
+        readiness = true,
+        database = true,
+        anthropic = true,
+        details = Array.Empty<string>()
+    });
 }).ExcludeFromDescription();
 
 string GetRateLimitPartitionKey(HttpContext context) =>

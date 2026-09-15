@@ -224,6 +224,21 @@ public class AnthropicClientTests
     }
 
     [Fact]
+    public async Task SendMessageAsync_WithNetworkFailure_ThrowsProviderUnavailableException()
+    {
+        var mockFactory = _mockRepository.Create<IHttpClientFactory>();
+        var mockLogger = _mockRepository.Create<Microsoft.Extensions.Logging.ILogger<AnthropicClient>>();
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.SetupNetworkFailure();
+        mockFactory.Setup(factory => factory.CreateClient("AnthropicClient"))
+            .Returns(new HttpClient(mockHandler) { BaseAddress = new Uri("https://api.anthropic.com") });
+        var client = new AnthropicClient(mockFactory.Object, mockLogger.Object, "sk-ant-test-key");
+
+        await Assert.ThrowsAsync<AnthropicProviderUnavailableException>(() =>
+            client.SendMessageAsync("System prompt", "User query"));
+    }
+
+    [Fact]
     public async Task AddAnthropicClient_RetriesTransientProviderFailures()
     {
         var handler = new MockHttpMessageHandler();
@@ -452,6 +467,7 @@ public class AnthropicClientTests
         private HttpStatusCode _statusCode = HttpStatusCode.OK;
         private string _content = "{}";
         private int _delayMs = 0;
+        private Exception? _networkException;
         private readonly Queue<(HttpStatusCode StatusCode, string Content)> _responses = new();
         public int RequestCount { get; private set; }
 
@@ -475,6 +491,8 @@ public class AnthropicClientTests
             _delayMs = delayMs;
         }
 
+        public void SetupNetworkFailure() => _networkException = new HttpRequestException("Connection refused");
+
         public void SetupResponses(params (HttpStatusCode StatusCode, string Content)[] responses)
         {
             foreach (var response in responses) _responses.Enqueue(response);
@@ -483,6 +501,7 @@ public class AnthropicClientTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestCount++;
+            if (_networkException is not null) throw _networkException;
             if (_delayMs > 0)
             {
                 await Task.Delay(_delayMs, cancellationToken);

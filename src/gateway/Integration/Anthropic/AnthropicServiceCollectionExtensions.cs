@@ -42,6 +42,9 @@ public static class AnthropicServiceCollectionExtensions
         var model = anthropicConfig["Model"] ?? "claude-3-5-sonnet-20241022";
         var maxTokens = int.TryParse(anthropicConfig["MaxTokens"], out var tokens) ? tokens : 1024;
         var timeoutSeconds = int.TryParse(anthropicConfig["RequestTimeoutSeconds"], out var seconds) ? seconds : 30;
+        var retryAttempts = int.TryParse(anthropicConfig["RetryMaxAttempts"], out var retries) ? Math.Clamp(retries, 0, 5) : 3;
+        var retryDelaySeconds = double.TryParse(anthropicConfig["RetryDelaySeconds"], out var delay) ? Math.Clamp(delay, 0.1, 10) : 1;
+        var circuitBreakSeconds = int.TryParse(anthropicConfig["CircuitBreakDurationSeconds"], out var breakDuration) ? Math.Clamp(breakDuration, 5, 120) : 30;
 
         // Register named HttpClient for Anthropic API communication
         services.AddHttpClient("AnthropicClient", client =>
@@ -52,14 +55,14 @@ public static class AnthropicServiceCollectionExtensions
         .AddStandardResilienceHandler(options =>
         {
             options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
-            options.Retry.MaxRetryAttempts = 3;
-            options.Retry.Delay = TimeSpan.FromSeconds(1);
+            options.Retry.MaxRetryAttempts = retryAttempts;
+            options.Retry.Delay = TimeSpan.FromSeconds(retryDelaySeconds);
             options.Retry.BackoffType = DelayBackoffType.Exponential;
             options.Retry.UseJitter = true;
             options.CircuitBreaker.FailureRatio = 0.5;
             options.CircuitBreaker.MinimumThroughput = 5;
             options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
-            options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+            options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(circuitBreakSeconds);
         });
 
         // Register AnthropicClient as singleton (thread-safe, stateless service)

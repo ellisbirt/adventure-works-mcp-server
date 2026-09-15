@@ -94,12 +94,14 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-	Commit[Push to main or version tag] --> Tests[Backend tests + frontend build]
-	Tests --> Image[Build gateway Docker image]
-	Image --> GHCR[Push immutable SHA/version tags to GHCR]
-	Tests --> WebBuild[Build frontend with deployed gateway URL]
+	Commit[Push to main or version tag] --> Test[Test gateway and frontend]
+	Test --> Image[Build and publish SHA image]
+	Image --> Promote[Promote digest to release]
+	Promote --> Deploy[Deploy immutable image digest]
+	Deploy --> WebBuild[Build frontend with deployed gateway URL]
 	WebBuild --> Blob[Upload dist to Blob $web container]
-	AzureLogin[GitHub OIDC] --> Blob
+	AzureLogin[GitHub OIDC] --> Deploy
+	AzureLogin --> Blob
 ```
 
 Pull requests run the test and build gates only. Pushes to `main` and version tags publish the gateway image and frontend. Azure authentication uses a federated Entra credential, so the workflow does not require an Azure client secret.
@@ -107,8 +109,8 @@ Pull requests run the test and build gates only. Pushes to `main` and version ta
 ### Operational Health and Provider Resilience
 
 - `GET /health` is a liveness endpoint: it confirms that the process can serve HTTP and is used by the Container App liveness probe.
-- `GET /health/ready` is the readiness endpoint: it returns `503` with database and Anthropic-key status when Azure SQL is unreachable or the Key Vault-provided Anthropic key is missing. It does not call Anthropic, avoiding probe-driven cost, quota consumption, and provider coupling.
-- The Anthropic HTTP client has a bounded three-attempt exponential-backoff retry policy with jitter, a 30-second circuit-breaker window after repeated failures, and a configuration-driven total timeout. Rate limiting, provider `5xx` responses, and timeouts are surfaced to callers as `503`; malformed requests and invalid provider credentials remain `502` failures.
+- `GET /health/ready` is the readiness endpoint: it reports `status`, `liveness`, `readiness`, `database`, `anthropic`, and `details`. It returns `503` with explicit reasons when Azure SQL is unreachable or the Key Vault-provided Anthropic key/model configuration is missing. It does not call Anthropic, avoiding probe-driven cost, quota consumption, and provider coupling.
+- The Anthropic HTTP client uses configurable bounded retries (`RetryMaxAttempts`), exponential backoff with jitter (`RetryDelaySeconds`), a total timeout (`RequestTimeoutSeconds`), and circuit breaking (`CircuitBreakDurationSeconds`). The defaults are three retries, one-second initial delay, and a 30-second timeout/break duration. Rate limits, provider `5xx` responses, network failures, and timeouts are surfaced to callers as `503`; malformed requests and invalid provider credentials remain `502` failures.
 
 ### Production Evolution
 
@@ -446,7 +448,7 @@ The GitHub Actions workflow performs this upload automatically on pushes to `mai
 
 ## GitHub Actions and Azure OIDC
 
-The workflow has four jobs:
+The workflow has five jobs:
 
 - `test`: .NET tests and frontend build.
 - `image`: GHCR image build and push.
@@ -627,7 +629,6 @@ Build the gateway image:
 ```bash
 docker build --tag enterprise-ai-gateway:local ./src/gateway
 ```
-# adventure-works-mcp-server
 
 ## Operational Caveats
 
