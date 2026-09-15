@@ -57,11 +57,15 @@ jobs:
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           image="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          # Container Apps caps app-name + revision-suffix at 54 chars combined, so the
+          # revision suffix uses a short SHA rather than the full 40-character image tag.
+          revision_suffix="sha-${IMAGE_TAG#sha-}"
+          revision_suffix="${revision_suffix:0:16}"
           az containerapp update \
             --name "${{ vars.GATEWAY_APP_NAME }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --image "$image" \
-            --revision-suffix "$IMAGE_TAG"
+            --revision-suffix "$revision_suffix"
           gateway_fqdn=$(az containerapp show \
             --name "${{ vars.GATEWAY_APP_NAME }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
