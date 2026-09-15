@@ -345,7 +345,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         if (string.IsNullOrWhiteSpace(request.Message)) return Results.BadRequest(new { error = "A chat message is required." });
 
         var chatService = services.GetService<IMcpChatService>();
-        if (chatService is null) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        if (chatService is null)
+        {
+            return Results.Json(new { error = "The database assistant is unavailable because AI provider configuration is missing." }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
 
         try
         {

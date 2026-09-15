@@ -58,6 +58,10 @@ type ChatResponse = {
   tool: string
 }
 
+type ErrorResponse = {
+  error?: string
+}
+
 const apiUrl = import.meta.env.VITE_GATEWAY_URL
   ? `${import.meta.env.VITE_GATEWAY_URL.replace(/\/$/, '')}/api/v1`
   : '/api/v1'
@@ -70,7 +74,46 @@ let nextMcpRequestId = 1
 
 async function readJson<T>(response: Response): Promise<T | null> {
   const body = await response.text()
-  return body ? JSON.parse(body) as T : null
+  if (!body) return null
+
+  try {
+    return JSON.parse(body) as T
+  } catch {
+    return null
+  }
+}
+
+function gatewayStatusMessage(status: number): string {
+  switch (status) {
+    case 401:
+      return 'Authentication is required. Sign in and try again.'
+    case 403:
+      return 'Your account is missing the required API scope.'
+    case 429:
+      return 'Too many requests. Wait a minute and try again.'
+    default:
+      return `Gateway rejected the request (${status}).`
+  }
+}
+
+function responseErrorMessage(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object' || !('error' in data)) return undefined
+
+  const error = (data as { error?: unknown }).error
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object' && 'message' in error && typeof (error as { message?: unknown }).message === 'string') {
+    return (error as { message: string }).message
+  }
+
+  return undefined
+}
+
+function formatNetworkError(error: unknown, fallback: string): string {
+  if (error instanceof TypeError && error.message.toLowerCase().includes('fetch')) {
+    return `Unable to reach the gateway at ${apiUrl}. Check network access and CORS origin configuration.`
+  }
+
+  return error instanceof Error ? error.message : fallback
 }
 
 function App() {
@@ -101,14 +144,24 @@ function App() {
   }
 
   async function mcpRequest<T>(method: string, params: Record<string, unknown> = {}) {
-    const response = await fetch(`${apiUrl}/mcp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
-      body: JSON.stringify({ jsonrpc: '2.0', id: nextMcpRequestId++, method, params }),
-    })
-    const data = await readJson<McpRpcResponse<T>>(response)
-    if (!response.ok || !data) throw new Error(`Gateway rejected the request (${response.status}).`)
-    if (data.error) throw new Error(data.error.message)
+    let response: Response
+    try {
+      response = await fetch(`${apiUrl}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
+        body: JSON.stringify({ jsonrpc: '2.0', id: nextMcpRequestId++, method, params }),
+      })
+    } catch (networkError) {
+      throw new Error(formatNetworkError(networkError, 'Unable to reach the gateway.'))
+    }
+
+    const data = await readJson<McpRpcResponse<T> | ErrorResponse>(response)
+    if (!response.ok) {
+      throw new Error(responseErrorMessage(data) ?? gatewayStatusMessage(response.status))
+    }
+    if (!data) throw new Error('Gateway returned an empty response.')
+    if ('error' in data && data.error && typeof data.error !== 'string') throw new Error(data.error.message)
+    if (!('result' in data)) throw new Error('Gateway returned an invalid MCP result envelope.')
     if (data.result === undefined) throw new Error('Gateway returned an empty MCP result.')
     return data.result
   }
@@ -187,14 +240,13 @@ function App() {
         headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
         body: JSON.stringify({ message: chatMessage.trim() }),
       })
-      const data = await readJson<ChatResponse | { error?: string }>(response)
+      const data = await readJson<ChatResponse | ErrorResponse>(response)
       if (!response.ok || !data || !('message' in data)) {
-        const errorMessage = data && 'error' in data ? data.error : undefined
-        throw new Error(errorMessage ?? 'The database assistant is unavailable.')
+        throw new Error(responseErrorMessage(data) ?? gatewayStatusMessage(response.status))
       }
       setChatResponse(data)
     } catch (requestError) {
-      setChatError(requestError instanceof Error ? requestError.message : 'Unable to reach the database assistant.')
+      setChatError(formatNetworkError(requestError, 'Unable to reach the database assistant.'))
     } finally {
       setChatLoading(false)
     }
