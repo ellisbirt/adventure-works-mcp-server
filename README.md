@@ -19,7 +19,7 @@ flowchart LR
 	Registry -->|Public image pull| Gateway
 ```
 
-The default deployment is intentionally public and low-cost:
+The default deployment is intentionally public and low-cost. This repository is a public portfolio/sample deployment, not a production network design. The public posture is a deliberate trade-off to keep the system accessible from Codespaces and local VS Code while minimizing fixed networking cost. Production deployments for real data should move behind private networking, private DNS, and a WAF/API gateway.
 
 | Layer | Azure resource | Responsibility |
 | --- | --- | --- |
@@ -94,17 +94,17 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-	Commit[Push to main or version tag] --> Test[Test gateway and frontend]
+	PullRequest[Pull request] --> Test[Test gateway and frontend]
+	Merge[Merge to main] --> Test
 	Test --> Image[Build and publish SHA image]
-	Image --> Promote[Promote digest to release]
-	Promote --> Deploy[Deploy immutable image digest]
-	Deploy --> WebBuild[Build frontend with deployed gateway URL]
+	Manual[Manual deployment] --> Deploy[Deploy selected SHA image]
+	Deploy --> WebBuild[Build frontend from selected commit]
 	WebBuild --> Blob[Upload dist to Blob $web container]
 	AzureLogin[GitHub OIDC] --> Deploy
 	AzureLogin --> Blob
 ```
 
-Pull requests run the test and build gates only. Pushes to `main` and version tags publish the gateway image and frontend. Azure authentication uses a federated Entra credential, so the workflow does not require an Azure client secret.
+Pull requests run the backend tests and frontend build gate. Merges to `main` run the same gate, then publish the gateway image as `sha-<commit-sha>` to GHCR. Deployment is a separate manual workflow: an operator selects one of those immutable SHA tags, the workflow updates the Container App, builds and uploads the frontend from the same commit, then restarts the active Container App revision. Azure authentication uses a federated Entra credential, so the workflows do not require an Azure client secret.
 
 The frontend job resolves the Container App hostname after gateway deployment and rebuilds the static assets with that URL. The hostname is stable for this Container App; an out-of-band hostname change requires a frontend redeployment.
 
@@ -435,15 +435,12 @@ The GitHub Actions workflow performs this upload automatically on pushes to `mai
 
 ## GitHub Actions and Azure OIDC
 
-The workflow has five jobs:
+The CI workflow has two jobs:
 
 - `test`: .NET tests and frontend build.
-- `image`: GHCR image build and push.
-- `Build`: promotes the successfully published image digest to the `release` tag and records the commit-to-digest mapping in the workflow summary.
-- `deploy`: Azure Container Apps updates the running app to that immutable digest and verifies that the deployed template reports the expected image reference.
-- `frontend`: Blob Static Website build and upload after the gateway deployment.
+- `image`: builds and publishes `ghcr.io/<owner>/<repository>:sha-<commit-sha>` only after the `main`-branch test job passes.
 
-Terraform is used for infrastructure provisioning and is not run by this release workflow. It uses `release` only as the initial Container App image and ignores subsequent image changes, preventing a routine infrastructure apply from reverting a digest-pinned pipeline deployment.
+The `Deploy gateway` workflow is manual only. Its required `image_tag` input accepts the immutable `sha-<commit-sha>` image tag produced by CI. It deploys that tag, rebuilds the frontend from the tag's commit, uploads the static assets, and restarts the new active revision. Terraform is used for infrastructure provisioning only and is not run by either workflow.
 
 Configure these repository variables:
 

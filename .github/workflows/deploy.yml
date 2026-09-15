@@ -1,0 +1,118 @@
+name: Deploy gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Immutable GHCR tag produced by Gateway CI (for example sha-<commit-sha>)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gateway-production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy selected gateway image and frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate image tag
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Checkout selected artifact source
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          commit_sha="${IMAGE_TAG#sha-}"
+          git fetch --no-tags origin "$commit_sha"
+          git checkout --detach "$commit_sha"
+
+      - name: Login to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update Container App image tag
+        id: gateway
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          image="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          az containerapp update \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "$image" \
+            --revision-suffix "$IMAGE_TAG"
+          gateway_fqdn=$(az containerapp show \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query 'properties.configuration.ingress.fqdn' \
+            --output tsv)
+          test -n "$gateway_fqdn"
+          echo "url=https://$gateway_fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/gateway.frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: src/gateway.frontend
+        run: npm ci
+
+      - name: Build frontend for Azure
+        working-directory: src/gateway.frontend
+        env:
+          VITE_GATEWAY_URL: ${{ steps.gateway.outputs.url }}
+          VITE_ENTRA_AUTHORITY: ${{ vars.ENTRA_EXTERNAL_ID_AUTHORITY }}
+          VITE_ENTRA_SPA_CLIENT_ID: ${{ vars.ENTRA_EXTERNAL_ID_SPA_CLIENT_ID }}
+          VITE_ENTRA_API_SCOPE: ${{ vars.ENTRA_EXTERNAL_ID_API_SCOPE }}
+        run: npm run build
+
+      - name: Upload frontend assets
+        run: |
+          az storage blob upload-batch \
+            --account-name "${{ vars.FRONTEND_STORAGE_ACCOUNT }}" \
+            --destination '$web' \
+            --source src/gateway.frontend/dist \
+            --auth-mode login \
+            --overwrite
+
+      - name: Restart active Container App revision
+        run: |
+          revision=$(az containerapp show \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query 'properties.latestRevisionName' \
+            --output tsv)
+          test -n "$revision"
+          az containerapp revision restart \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --revision "$revision"
+          {
+            echo "### Deployment"
+            echo "- Image: \`${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}\`"
+            echo "- Source commit: \`${{ inputs.image_tag }}\`"
+            echo "- Revision restarted: \`$revision\`"
+          } >> "$GITHUB_STEP_SUMMARY"
