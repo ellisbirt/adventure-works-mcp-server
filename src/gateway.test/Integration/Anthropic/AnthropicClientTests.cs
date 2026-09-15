@@ -1,6 +1,9 @@
 using FluentAssertions;
 using Moq;
 using System.Net;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using EnterpriseAiGateway.Integration.Anthropic;
 using Xunit;
@@ -195,7 +198,7 @@ public class AnthropicClientTests
         var client = new AnthropicClient(mockFactory.Object, mockLogger.Object, "sk-ant-test-key");
 
         // Act & Assert
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
+        await Assert.ThrowsAsync<AnthropicProviderUnavailableException>(() =>
             client.SendMessageAsync("System prompt", "User query")
         );
     }
@@ -215,9 +218,36 @@ public class AnthropicClientTests
         var client = new AnthropicClient(mockFactory.Object, mockLogger.Object, "sk-ant-test-key");
 
         // Act & Assert
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
+        await Assert.ThrowsAsync<AnthropicProviderUnavailableException>(() =>
             client.SendMessageAsync("System prompt", "User query")
         );
+    }
+
+    [Fact]
+    public async Task AddAnthropicClient_RetriesTransientProviderFailures()
+    {
+        var handler = new MockHttpMessageHandler();
+        handler.SetupResponses(
+            (HttpStatusCode.ServiceUnavailable, "{\"error\":\"temporarily unavailable\"}"),
+            (HttpStatusCode.OK, "{\"id\":\"msg_retry\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Recovered\"}],\"model\":\"claude\",\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"));
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Anthropic:ApiKey"] = "sk-ant-test-key",
+            ["Anthropic:RequestTimeoutSeconds"] = "10"
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAnthropicClient(configuration);
+        services.Configure<HttpClientFactoryOptions>("AnthropicClient", options =>
+            options.HttpMessageHandlerBuilderActions.Add(builder => builder.PrimaryHandler = handler));
+
+        await using var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<IAnthropicClient>();
+
+        var result = await client.SendMessageAsync("System prompt", "User query");
+
+        result.Should().Be("Recovered");
+        handler.RequestCount.Should().Be(2);
     }
 
     #endregion
@@ -246,7 +276,7 @@ public class AnthropicClientTests
         );
 
         // Act & Assert
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
+        await Assert.ThrowsAsync<AnthropicProviderUnavailableException>(() =>
             client.SendMessageAsync("System prompt", "User query")
         );
     }
@@ -287,8 +317,8 @@ public class AnthropicClientTests
         mockLogger.Verify(
             l => l.Log(
                 LogLevel.Information,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("InputTokens=500")),
+                It.Is<EventId>(eventId => eventId.Name == "Usage"),
+                It.IsAny<It.IsAnyType>(),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()
             ),
@@ -333,8 +363,8 @@ public class AnthropicClientTests
         mockLogger.Verify(
             l => l.Log(
                 LogLevel.Information,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("CacheRead=5000")),
+                It.Is<EventId>(eventId => eventId.Name == "CacheHit"),
+                It.IsAny<It.IsAnyType>(),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()
             ),
@@ -422,6 +452,8 @@ public class AnthropicClientTests
         private HttpStatusCode _statusCode = HttpStatusCode.OK;
         private string _content = "{}";
         private int _delayMs = 0;
+        private readonly Queue<(HttpStatusCode StatusCode, string Content)> _responses = new();
+        public int RequestCount { get; private set; }
 
         public void SetupResponse<T>(HttpStatusCode statusCode, T response)
         {
@@ -443,16 +475,25 @@ public class AnthropicClientTests
             _delayMs = delayMs;
         }
 
+        public void SetupResponses(params (HttpStatusCode StatusCode, string Content)[] responses)
+        {
+            foreach (var response in responses) _responses.Enqueue(response);
+        }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            RequestCount++;
             if (_delayMs > 0)
             {
                 await Task.Delay(_delayMs, cancellationToken);
             }
 
-            return new HttpResponseMessage(_statusCode)
+            var response = _responses.Count > 0
+                ? _responses.Dequeue()
+                : (StatusCode: _statusCode, Content: _content);
+            return new HttpResponseMessage(response.StatusCode)
             {
-                Content = new StringContent(_content, System.Text.Encoding.UTF8, "application/json")
+                Content = new StringContent(response.Content, System.Text.Encoding.UTF8, "application/json")
             };
         }
     }

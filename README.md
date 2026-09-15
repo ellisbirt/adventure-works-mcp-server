@@ -104,6 +104,12 @@ flowchart LR
 
 Pull requests run the test and build gates only. Pushes to `main` and version tags publish the gateway image and frontend. Azure authentication uses a federated Entra credential, so the workflow does not require an Azure client secret.
 
+### Operational Health and Provider Resilience
+
+- `GET /health` is a liveness endpoint: it confirms that the process can serve HTTP and is used by the Container App liveness probe.
+- `GET /health/ready` is the readiness endpoint: it returns `503` with database and Anthropic-key status when Azure SQL is unreachable or the Key Vault-provided Anthropic key is missing. It does not call Anthropic, avoiding probe-driven cost, quota consumption, and provider coupling.
+- The Anthropic HTTP client has a bounded three-attempt exponential-backoff retry policy with jitter, a 30-second circuit-breaker window after repeated failures, and a configuration-driven total timeout. Rate limiting, provider `5xx` responses, and timeouts are surfaced to callers as `503`; malformed requests and invalid provider credentials remain `502` failures.
+
 ### Production Evolution
 
 The public sample deliberately omits private networking to avoid fixed networking cost and to remain accessible from Codespaces. A production topology should add:
@@ -445,10 +451,10 @@ The workflow has four jobs:
 - `test`: .NET tests and frontend build.
 - `image`: GHCR image build and push.
 - `Build`: promotes the successfully published SHA image to the `release` tag.
-- `deploy`: Azure Container Apps updates the running app to the `release` image.
+- `deploy`: Azure Container Apps updates the running app to the immutable digest promoted to `release`.
 - `frontend`: Blob Static Website build and upload after the gateway deployment.
 
-Terraform is used for infrastructure provisioning and is not run by this release workflow. It references the same `release` image channel that the workflow promotes and deploys.
+Terraform is used for infrastructure provisioning and is not run by this release workflow. It uses `release` only as the initial Container App image and ignores subsequent image changes, preventing a routine infrastructure apply from reverting a digest-pinned pipeline deployment.
 
 Configure these repository variables:
 
@@ -623,31 +629,12 @@ docker build --tag enterprise-ai-gateway:local ./src/gateway
 ```
 # adventure-works-mcp-server
 
-# Shortcomings
+## Operational Caveats
 
-## Public Network Access to Key Vault and the database
-To permit this to run in a _GitHub Codespace_ and locally through a dynamic home ISP address, IP address restrictions are currently disabled.
+This low-cost public demo intentionally keeps public network access enabled for Azure SQL and Key Vault to support Codespaces and dynamic developer IP addresses. It is not a private-network production topology.
 
-A future enhancement would be to add automatic agents to open pinholes for clients running this gateway with a suitable authentication context.
+The Container App runs one to two replicas on Consumption. It has no regional failover, deployment slots, WAF, or private endpoints. A production deployment should add private networking, Front Door or an API gateway/WAF, deployment slots or blue/green delivery, and a multi-region recovery plan.
 
-## Anthropic integration is not showcased.
+The frontend is rebuilt only after the digest-pinned gateway deployment and resolves the current Container App hostname during that job. The hostname is stable for this Container App; an out-of-band hostname change still requires a frontend redeployment.
 
-## Frontend deployment can drift from the backend
-The frontend bakes GATEWAY_URL at build time:
-
-gateway-image.yml:58-62
-gateway-image.yml:135-139
-If the Container App hostname changes, the frontend can continue calling the old endpoint.
-
-Fix: Make Terraform or a release workflow update the frontend variable automatically, and deploy backend/frontend as one versioned release.
-
-# No security controls on web FE
-This is by design on this low-cost showcase
-
-# Container reference
-Terraform references `ghcr.io/ellisbirt/adventure-works-mcp-server:release`. After the gateway image build succeeds, the `Build` workflow job promotes that immutable `:sha-<COMMIT_SHA>` image to the mutable `:release` channel. The deploy job then updates Container Apps with `:release` and uses the SHA in its revision suffix.
-
-Terraform does not run in the release workflow. To roll back, promote a previously published SHA image to `:release` and deploy a new Container App revision.
-
-# Operational resilience
-This is a single instance running on the lowest possible SKUs  A production system would be through Azure Front Door and use a more resilient SKU, Probably App Service Containers with deployment slots and, if resilience is important, mirroring
+`release` is a mutable registry channel for Terraform bootstrap and operator discovery. The active Container App revision is pinned to the promoted immutable image digest. Roll back by promoting a previously published SHA/digest and deploying that digest as a new revision.

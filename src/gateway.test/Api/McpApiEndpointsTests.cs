@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Moq;
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
+using EnterpriseAiGateway.Integration.Anthropic;
+using EnterpriseAiGateway.Integration.Chat;
 using EnterpriseAiGateway.Tests.Fixtures;
 using Xunit;
 
@@ -95,6 +98,22 @@ public class McpApiEndpointsTests : IAsyncLifetime
     public async Task Readiness_ReturnsServiceUnavailableWhenAnthropicSecretIsMissing()
     {
         var response = await _client.GetAsync("/health/ready");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task Chat_ReturnsServiceUnavailableWhenAnthropicProviderIsUnavailable()
+    {
+        var unavailableChatService = new Mock<IMcpChatService>();
+        unavailableChatService
+            .Setup(service => service.AskAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AnthropicProviderUnavailableException("Anthropic API is temporarily unavailable."));
+        await using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddScoped(_ => unavailableChatService.Object)));
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/chat", new ChatRequest("Summarize products"));
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
     }

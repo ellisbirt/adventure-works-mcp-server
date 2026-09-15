@@ -127,8 +127,7 @@ app.MapGet("/health/ready", async (
         logger.LogWarning(exception, "Gateway readiness database check failed.");
     }
 
-    var secretReady = !app.Environment.IsProduction() ||
-        !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]);
+    var secretReady = !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]);
     if (!databaseReady || !secretReady)
     {
         return Results.Json(
@@ -286,6 +285,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         catch (InvalidOperationException)
         {
             return Results.Json(new { error = "The database assistant could not complete the request." }, statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (AnthropicProviderUnavailableException)
+        {
+            return Results.Json(new { error = "The AI provider is temporarily unavailable. Please try again shortly." }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         catch (HttpRequestException)
         {

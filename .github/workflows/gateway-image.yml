@@ -68,6 +68,8 @@ jobs:
     name: Build and publish GHCR image
     needs: test
     if: github.event_name != 'pull_request'
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,6 +98,7 @@ jobs:
             type=ref,event=tag
 
       - name: Build and push gateway image
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: ./src/gateway
@@ -114,6 +117,8 @@ jobs:
     name: Build
     needs: image
     if: github.event_name != 'pull_request'
+    outputs:
+      digest: ${{ needs.image.outputs.digest }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,7 +138,7 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag "${{ env.IMAGE_NAME }}:release" \
-            "${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA}"
+            "${{ env.IMAGE_NAME }}@${{ needs.image.outputs.digest }}"
 
   frontend:
     name: Publish frontend to Azure Blob Static Website
@@ -215,5 +220,5 @@ jobs:
           az containerapp update \
             --name "${{ vars.GATEWAY_APP_NAME }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --image "${{ env.IMAGE_NAME }}:release" \
+            --image "${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
             --revision-suffix "sha-${{ github.sha }}"

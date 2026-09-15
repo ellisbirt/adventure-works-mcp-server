@@ -1,10 +1,19 @@
 using System.Net.Http.Json;
+using System.Net;
 using System.Text.Json;
 using EnterpriseAiGateway.Logging;
 using EnterpriseAiGateway.Infrastructure;
 using Microsoft.Extensions.Logging;
 
 namespace EnterpriseAiGateway.Integration.Anthropic;
+
+public sealed class AnthropicProviderUnavailableException : HttpRequestException
+{
+    public AnthropicProviderUnavailableException(string message, Exception? innerException = null, HttpStatusCode? statusCode = null)
+        : base(message, innerException, statusCode)
+    {
+    }
+}
 
 /// <summary>
 /// Integration client for Anthropic Claude API with prompt caching support.
@@ -184,6 +193,11 @@ public class AnthropicClient : IAnthropicClient
             {
                 var errorContent = await response.Content.ReadAsStringAsync(cts.Token);
                 AnthropicLogMessages.ApiError(_logger, (int)response.StatusCode, errorContent.Length);
+                if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= StatusCodes.Status500InternalServerError)
+                {
+                    throw new AnthropicProviderUnavailableException("Anthropic API is temporarily unavailable.", statusCode: response.StatusCode);
+                }
+
                 throw new HttpRequestException($"Anthropic API returned {(int)response.StatusCode}.");
             }
 
@@ -211,7 +225,7 @@ public class AnthropicClient : IAnthropicClient
         catch (OperationCanceledException ex) when (ex.InnerException is TimeoutException || _requestTimeout != Timeout.InfiniteTimeSpan)
         {
             AnthropicLogMessages.RequestTimeout(_logger, _requestTimeout.TotalSeconds);
-            throw new HttpRequestException($"Anthropic API request timed out after {_requestTimeout.TotalSeconds}s", ex);
+            throw new AnthropicProviderUnavailableException($"Anthropic API request timed out after {_requestTimeout.TotalSeconds}s", ex);
         }
         catch (HttpRequestException ex)
         {
