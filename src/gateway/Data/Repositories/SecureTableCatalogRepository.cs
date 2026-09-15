@@ -35,8 +35,10 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
 
     public async Task<IReadOnlyList<SafeTableDefinition>> GetTablesAsync()
     {
-        await using var connection = _context.Database.GetDbConnection();
-        await connection.OpenAsync();
+        // GetDbConnection() returns the DbContext's own shared connection, so it is opened
+        // (not disposed) here: disposing it would invalidate it for later calls in the same scope.
+        var connection = _context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open) await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT s.name AS SchemaName, t.name AS TableName, c.name AS ColumnName
@@ -90,8 +92,8 @@ public sealed class SecureTableCatalogRepository : ISecureTableCatalogRepository
         var queryColumns = tableDefinition.Columns.Where(column => !IsPiiColumn(_context.Model, schema, table, column)).ToList();
         var piiColumns = tableDefinition.Columns.Where(column => IsPiiColumn(_context.Model, schema, table, column)).ToList();
 
-        await using var connection = _context.Database.GetDbConnection();
-        await connection.OpenAsync();
+        var connection = _context.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open) await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         var whereClause = matchedFilterColumn is null ? string.Empty : $" WHERE {QuoteIdentifier(matchedFilterColumn)} = @filterValue";
         command.CommandText = $"SELECT TOP (@limit) {string.Join(", ", queryColumns.Select(QuoteIdentifier))} FROM {QuoteIdentifier(tableDefinition.Schema)}.{QuoteIdentifier(tableDefinition.Name)}{whereClause};";
