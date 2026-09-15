@@ -2,6 +2,10 @@
 
 An end-to-end portfolio sample showing a React frontend, a .NET 8 JSON-RPC MCP gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
 
+## About This Project
+
+This repository is a self-directed portfolio project, not client or employer work product. It exists to demonstrate hands-on ability across a full stack: cloud infrastructure as code, a governed data-access API, identity and secret management, observability, and CI/CD, wired together end to end rather than left as disconnected samples.
+
 ## Architecture
 
 ### Deployed Topology
@@ -134,6 +138,8 @@ POST /api/v1/chat
 ```
 
 `POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. The endpoint is stateless: `initialize` negotiates protocol capabilities but no server-side session is created or required. The versionless `/mcp` route is retained as an alias. JSON-RPC batches are supported up to 20 requests; notifications receive no response body. The old `/mcp/tools` and `/mcp/tools/call` REST routes are removed.
+
+The JSON-RPC envelope, batching, and tool dispatch are implemented by hand in `Program.cs` rather than through the `ModelContextProtocol.AspNetCore` SDK package. That is a deliberate choice for this portfolio piece: it demonstrates the ability to work directly with the MCP wire protocol, minimal APIs, and ASP.NET Core request pipelines rather than only wiring up a third-party SDK.
 
 Example tool listing request:
 
