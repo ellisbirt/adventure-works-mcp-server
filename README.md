@@ -56,7 +56,7 @@ sequenceDiagram
 	G-->>B: MCP text response
 ```
 
-The `IAnthropicClient` integration is available for LLM orchestration paths, but `/mcp/tools/call` currently returns the governed SQL context directly. A future Claude-backed endpoint should keep the same boundary: retrieve and mask data first, then pass only the approved context to Anthropic.
+`/mcp/tools/call` returns governed SQL context directly. `POST /chat` uses Anthropic only after retrieving an approved MCP tool result; it never sends database entities or unapproved columns to the provider.
 
 ### Gateway Boundaries
 
@@ -106,24 +106,20 @@ flowchart LR
 
 Pull requests run the test and build gates only. Pushes to `main` and version tags publish the gateway image and frontend. Azure authentication uses a federated Entra credential, so the workflow does not require an Azure client secret.
 
+The frontend job resolves the Container App hostname after gateway deployment and rebuilds the static assets with that URL. The hostname is stable for this Container App; an out-of-band hostname change requires a frontend redeployment.
+
 ### Operational Health and Provider Resilience
 
-- `GET /health` is a liveness endpoint: it confirms that the process can serve HTTP and is used by the Container App liveness probe.
-- `GET /health/ready` is the readiness endpoint: it reports `status`, `liveness`, `readiness`, `database`, `anthropic`, and `details`. It returns `503` with explicit reasons when Azure SQL is unreachable or the Key Vault-provided Anthropic key/model configuration is missing. It does not call Anthropic, avoiding probe-driven cost, quota consumption, and provider coupling.
-- The Anthropic HTTP client uses configurable bounded retries (`RetryMaxAttempts`), exponential backoff with jitter (`RetryDelaySeconds`), a total timeout (`RequestTimeoutSeconds`), and circuit breaking (`CircuitBreakDurationSeconds`). The defaults are three retries, one-second initial delay, and a 30-second timeout/break duration. Rate limits, provider `5xx` responses, network failures, and timeouts are surfaced to callers as `503`; malformed requests and invalid provider credentials remain `502` failures.
+- Both health endpoints return the same fields: `status`, `liveness`, `readiness`, `database`, `anthropic`, and `details`.
+- `GET /health` is a liveness endpoint: it confirms that the process can serve HTTP and reports dependency/readiness fields as `null`. It is used by the Container App liveness probe.
+- `GET /health/ready` verifies database connectivity with a configurable five-second default deadline (`Health:DatabaseTimeoutSeconds`) and Key Vault-provided Anthropic key/model configuration. It returns `503` with explicit reasons when a dependency is unavailable and does not call Anthropic, avoiding probe-driven cost, quota consumption, and provider coupling.
+- The Anthropic HTTP client uses configurable bounded retries (`RetryMaxAttempts`), exponential backoff with jitter (`RetryDelaySeconds`), a total timeout (`RequestTimeoutSeconds`), and circuit breaking (`CircuitBreakDurationSeconds`). The defaults are three retries, one-second initial delay, and a 30-second timeout/break duration. Rate limits, provider `5xx` responses, network failures, and timeouts are surfaced to callers as `503`; malformed provider responses, invalid requests, and invalid provider credentials return `502` without exposing provider content.
 
-### Production Evolution
+### Deployment Posture
 
-The public sample deliberately omits private networking to avoid fixed networking cost and to remain accessible from Codespaces. A production topology should add:
+**Implemented demo posture:** the sample uses public Container Apps ingress and permits public access to Azure SQL and Key Vault so it remains usable from Codespaces and dynamic developer IP addresses. It uses Microsoft Entra authentication for the gateway, managed identity for SQL and Key Vault, Key Vault secret references, encrypted Blob Terraform state, least-privilege database reads, and digest-pinned application revisions.
 
-1. A VNet with dedicated subnets for Container Apps integration and private endpoints.
-2. Private endpoints and private DNS zones for SQL, Key Vault, and storage.
-3. Disabled public network access on SQL, Key Vault, and storage.
-4. Front Door or an API gateway/WAF in front of the gateway and frontend.
-5. Restricted CORS origins and ingress rules.
-6. Separate subscriptions/resource groups and least-privilege deployment identities.
-7. Encrypted remote Terraform state with state locking and controlled access.
-8. Immutable image references managed by the release pipeline rather than Terraform.
+**Production requirements not implemented here:** private Container Apps networking, private endpoints and DNS for SQL/Key Vault/storage, disabled public network access, WAF or API gateway protection, deployment slots or blue/green rollout, regional recovery, and a controlled deployment network. This Terraform module rejects `enable_public_network_access = false` because it does not provision the required private networking.
 
 ### Gateway API
 
@@ -170,18 +166,9 @@ export ADVENTURE_WORKS_CONNECTION_STRING="Server=tcp:...;Authentication=Active D
 
 Keep gateway-specific extensions in separate partial classes under `Data/Scaffolded/Entities` so regeneration does not overwrite them.
 
-## Important Security Note
+## Secret Handling
 
-This repository defaults to a low-cost public sample deployment so it can be demonstrated from Codespaces and local VS Code:
-
-- Azure SQL public network access is enabled by default.
-- Key Vault public network access is enabled by default.
-- Container Apps has public ingress.
-- Private endpoints, VNet integration, private DNS, WAF, and IP restrictions are intentionally omitted.
-
-Do not use these defaults for real customer data. For production, set `enable_public_network_access = false` and add private networking, private DNS, restricted ingress, a WAF/API gateway, and a controlled deployment network.
-
-Never commit API keys, passwords, `.env` files, Terraform variable files, or Terraform state. The API key previously pasted into chat or a terminal should be revoked and replaced.
+Never commit API keys, passwords, `.env` files, Terraform variable files, or Terraform state. Store the Anthropic key in Key Vault for hosted deployments and use an untracked environment variable or Codespaces secret locally. Revoke and replace any key exposed in chat, a terminal transcript, or version control.
 
 ## Prerequisites
 
@@ -239,10 +226,10 @@ docker push ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>
 
 The Container App can pull a public image without registry credentials. For a private GHCR package, add a Container Apps registry configuration with a read-only package token; do not put that token in committed Terraform files.
 
-Use an immutable SHA tag for hosted deployments when possible:
+The workflow publishes SHA tags for traceability, then promotes the built digest to `release` and deploys the digest. Operators should use an image digest for a deterministic manual deployment:
 
 ```text
-ghcr.io/<GITHUB_OWNER>/<REPOSITORY>:sha-<COMMIT_SHA>
+ghcr.io/<GITHUB_OWNER>/<REPOSITORY>@sha256:<DIGEST>
 ```
 
 ## Terraform Deployment
@@ -279,7 +266,7 @@ export TF_STATE_CONTAINER="tfstate"
 terraform init -upgrade -migrate-state
 ```
 
-The backend uses Azure CLI/Entra authentication and native Blob state locking. CI/CD identities must also have `Storage Blob Data Contributor` on the state account before running Terraform.
+The backend uses Azure CLI/Entra authentication and native Blob state locking. Any automation identity that runs Terraform also needs `Storage Blob Data Contributor` on the state account.
 
 Create a local untracked variables file from the example:
 
@@ -452,8 +439,8 @@ The workflow has five jobs:
 
 - `test`: .NET tests and frontend build.
 - `image`: GHCR image build and push.
-- `Build`: promotes the successfully published SHA image to the `release` tag.
-- `deploy`: Azure Container Apps updates the running app to the immutable digest promoted to `release`.
+- `Build`: promotes the successfully published image digest to the `release` tag and records the commit-to-digest mapping in the workflow summary.
+- `deploy`: Azure Container Apps updates the running app to that immutable digest and verifies that the deployed template reports the expected image reference.
 - `frontend`: Blob Static Website build and upload after the gateway deployment.
 
 Terraform is used for infrastructure provisioning and is not run by this release workflow. It uses `release` only as the initial Container App image and ignores subsequent image changes, preventing a routine infrastructure apply from reverting a digest-pinned pipeline deployment.
@@ -629,13 +616,3 @@ Build the gateway image:
 ```bash
 docker build --tag enterprise-ai-gateway:local ./src/gateway
 ```
-
-## Operational Caveats
-
-This low-cost public demo intentionally keeps public network access enabled for Azure SQL and Key Vault to support Codespaces and dynamic developer IP addresses. It is not a private-network production topology.
-
-The Container App runs one to two replicas on Consumption. It has no regional failover, deployment slots, WAF, or private endpoints. A production deployment should add private networking, Front Door or an API gateway/WAF, deployment slots or blue/green delivery, and a multi-region recovery plan.
-
-The frontend is rebuilt only after the digest-pinned gateway deployment and resolves the current Container App hostname during that job. The hostname is stable for this Container App; an out-of-band hostname change still requires a frontend redeployment.
-
-`release` is a mutable registry channel for Terraform bootstrap and operator discovery. The active Container App revision is pinned to the promoted immutable image digest. Roll back by promoting a previously published SHA/digest and deploying that digest as a new revision.

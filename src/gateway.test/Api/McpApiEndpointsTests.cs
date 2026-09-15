@@ -92,16 +92,29 @@ public class McpApiEndpointsTests : IAsyncLifetime
     public async Task Health_ReturnsOkWithoutAuthentication()
     {
         var response = await _client.GetAsync("/health");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("status").GetString().Should().Be("alive");
+        body.GetProperty("liveness").GetBoolean().Should().BeTrue();
+        body.GetProperty("readiness").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("database").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("anthropic").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("details").GetArrayLength().Should().Be(0);
     }
 
     [Fact]
     public async Task Readiness_ReturnsServiceUnavailableWhenAnthropicSecretIsMissing()
     {
         var response = await _client.GetAsync("/health/ready");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.GetProperty("liveness").GetBoolean().Should().BeTrue();
+        body.GetProperty("readiness").GetBoolean().Should().BeFalse();
+        body.GetProperty("anthropic").GetBoolean().Should().BeFalse();
+        body.GetProperty("details").EnumerateArray().Select(item => item.GetString())
+            .Should().Contain("anthropic_configuration_missing");
     }
 
     [Fact]
@@ -124,6 +137,39 @@ public class McpApiEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Readiness_ReturnsServiceUnavailableWhenDatabaseCannotConnect()
+    {
+        await using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Anthropic:ApiKey"] = "test-key",
+                ["Anthropic:Model"] = "test-model"
+            }));
+            builder.ConfigureServices(services =>
+            {
+                foreach (var descriptor in services.Where(service => service.ServiceType == typeof(DbContextOptions<AdventureWorksDbContext>)).ToList())
+                {
+                    services.Remove(descriptor);
+                }
+
+                services.AddDbContext<AdventureWorksDbContext>(options =>
+                    options.UseSqlServer("Server=127.0.0.1,1;Database=master;User ID=unavailable;Password=unavailable;Connect Timeout=1;Encrypt=False"));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        body.GetProperty("database").GetBoolean().Should().BeFalse();
+        body.GetProperty("anthropic").GetBoolean().Should().BeTrue();
+        body.GetProperty("details").EnumerateArray().Select(item => item.GetString())
+            .Should().Contain("database_unreachable");
+    }
+
+    [Fact]
     public async Task Chat_ReturnsServiceUnavailableWhenAnthropicProviderIsUnavailable()
     {
         var unavailableChatService = new Mock<IMcpChatService>();
@@ -137,6 +183,22 @@ public class McpApiEndpointsTests : IAsyncLifetime
         var response = await client.PostAsJsonAsync("/chat", new ChatRequest("Summarize products"));
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task Chat_ReturnsBadGatewayWhenAnthropicProviderResponseIsMalformed()
+    {
+        var invalidResponseChatService = new Mock<IMcpChatService>();
+        invalidResponseChatService
+            .Setup(service => service.AskAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AnthropicProviderResponseException("Anthropic API returned an invalid response.", new JsonException()));
+        await using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddScoped(_ => invalidResponseChatService.Object)));
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/chat", new ChatRequest("Summarize products"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
     }
 
     #region GET /mcp/tools Tests

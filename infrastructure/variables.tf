@@ -45,7 +45,7 @@ variable "developer_ip_address" {
 }
 
 variable "enable_public_network_access" {
-  description = "Enable public access to Azure SQL and Key Vault. Required by this low-cost sample because no private networking is provisioned. Disable for real data when private endpoints are added."
+  description = "Public access for Azure SQL and Key Vault. This public-demo module requires true because it does not create private networking."
   type        = bool
   default     = true
 }

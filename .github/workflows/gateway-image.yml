@@ -119,6 +119,7 @@ jobs:
     if: github.event_name != 'pull_request'
     outputs:
       digest: ${{ needs.image.outputs.digest }}
+      artifact: ${{ steps.promotion.outputs.artifact }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -139,6 +140,17 @@ jobs:
           docker buildx imagetools create \
             --tag "${{ env.IMAGE_NAME }}:release" \
             "${{ env.IMAGE_NAME }}@${{ needs.image.outputs.digest }}"
+
+      - name: Record promoted artifact
+        id: promotion
+        run: |
+          artifact="${{ env.IMAGE_NAME }}@${{ needs.image.outputs.digest }}"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Promoted gateway artifact"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Image: \`$artifact\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
     name: Publish frontend to Azure Blob Static Website
@@ -220,5 +232,16 @@ jobs:
           az containerapp update \
             --name "${{ vars.GATEWAY_APP_NAME }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
-            --image "${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}" \
+            --image "${{ needs.build.outputs.artifact }}" \
             --revision-suffix "sha-${{ github.sha }}"
+
+      - name: Verify deployed artifact
+        run: |
+          expected_image="${{ needs.build.outputs.artifact }}"
+          deployed_image=$(az containerapp show \
+            --name "${{ vars.GATEWAY_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --query 'properties.template.containers[0].image' \
+            --output tsv)
+          test "$deployed_image" = "$expected_image"
+          echo "Deployed image: \`$deployed_image\`" >> "$GITHUB_STEP_SUMMARY"

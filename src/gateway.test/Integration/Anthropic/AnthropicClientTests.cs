@@ -239,6 +239,21 @@ public class AnthropicClientTests
     }
 
     [Fact]
+    public async Task SendMessageAsync_WithMalformedSuccessResponse_ThrowsProviderResponseException()
+    {
+        var mockFactory = _mockRepository.Create<IHttpClientFactory>();
+        var mockLogger = _mockRepository.Create<Microsoft.Extensions.Logging.ILogger<AnthropicClient>>();
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.SetupResponses((HttpStatusCode.OK, "not-json"));
+        mockFactory.Setup(factory => factory.CreateClient("AnthropicClient"))
+            .Returns(new HttpClient(mockHandler) { BaseAddress = new Uri("https://api.anthropic.com") });
+        var client = new AnthropicClient(mockFactory.Object, mockLogger.Object, "sk-ant-test-key");
+
+        await Assert.ThrowsAsync<AnthropicProviderResponseException>(() =>
+            client.SendMessageAsync("System prompt", "User query"));
+    }
+
+    [Fact]
     public async Task AddAnthropicClient_RetriesTransientProviderFailures()
     {
         var handler = new MockHttpMessageHandler();
@@ -294,6 +309,22 @@ public class AnthropicClientTests
         await Assert.ThrowsAsync<AnthropicProviderUnavailableException>(() =>
             client.SendMessageAsync("System prompt", "User query")
         );
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_WhenCallerCancels_PropagatesCancellation()
+    {
+        var mockFactory = _mockRepository.Create<IHttpClientFactory>();
+        var mockLogger = _mockRepository.Create<Microsoft.Extensions.Logging.ILogger<AnthropicClient>>();
+        var mockHandler = new MockHttpMessageHandler();
+        mockHandler.SetupDelayedResponse(2000);
+        mockFactory.Setup(factory => factory.CreateClient("AnthropicClient"))
+            .Returns(new HttpClient(mockHandler) { BaseAddress = new Uri("https://api.anthropic.com") });
+        var client = new AnthropicClient(mockFactory.Object, mockLogger.Object, "sk-ant-test-key", requestTimeoutSeconds: 30);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.SendMessageAsync("System prompt", "User query", cancellation.Token));
     }
 
     #endregion

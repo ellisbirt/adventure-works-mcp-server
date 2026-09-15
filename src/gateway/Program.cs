@@ -108,11 +108,13 @@ if (authenticationRequired)
 }
 app.UseRateLimiter();
 
-app.MapGet("/health", () => Results.Ok(new
-{
-    status = "alive",
-    liveness = true
-}))
+app.MapGet("/health", () => Results.Ok(new HealthResponse(
+    Status: "alive",
+    Liveness: true,
+    Readiness: null,
+    Database: null,
+    Anthropic: null,
+    Details: Array.Empty<string>())))
     .ExcludeFromDescription();
 
 app.MapGet("/health/ready", async (
@@ -122,9 +124,21 @@ app.MapGet("/health/ready", async (
     CancellationToken cancellationToken) =>
 {
     var databaseReady = false;
+    var databaseFailureReason = "database_unreachable";
+    var databaseTimeoutSeconds = Math.Clamp(
+        configuration.GetValue<int?>("Health:DatabaseTimeoutSeconds") ?? 5,
+        1,
+        30);
     try
     {
-        databaseReady = await db.Database.CanConnectAsync(cancellationToken);
+        using var databaseCheckCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        databaseCheckCancellation.CancelAfter(TimeSpan.FromSeconds(databaseTimeoutSeconds));
+        databaseReady = await db.Database.CanConnectAsync(databaseCheckCancellation.Token);
+    }
+    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+    {
+        databaseFailureReason = "database_timeout";
+        logger.LogWarning("Gateway readiness database check timed out after {TimeoutSeconds}s.", databaseTimeoutSeconds);
     }
     catch (Exception exception)
     {
@@ -134,33 +148,28 @@ app.MapGet("/health/ready", async (
     var anthropicReady = !string.IsNullOrWhiteSpace(configuration["Anthropic:ApiKey"]) &&
                          !string.IsNullOrWhiteSpace(configuration["Anthropic:Model"]);
     var reasons = new List<string>();
-    if (!databaseReady) reasons.Add("database_unreachable");
+    if (!databaseReady) reasons.Add(databaseFailureReason);
     if (!anthropicReady) reasons.Add("anthropic_configuration_missing");
 
     if (reasons.Count > 0)
     {
-        return Results.Json(
-            new
-            {
-                status = "not_ready",
-                liveness = true,
-                readiness = false,
-                database = databaseReady,
-                anthropic = anthropicReady,
-                details = reasons
-            },
+        return Results.Json(new HealthResponse(
+            Status: "not_ready",
+            Liveness: true,
+            Readiness: false,
+            Database: databaseReady,
+            Anthropic: anthropicReady,
+            Details: reasons),
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    return Results.Ok(new
-    {
-        status = "ready",
-        liveness = true,
-        readiness = true,
-        database = true,
-        anthropic = true,
-        details = Array.Empty<string>()
-    });
+    return Results.Ok(new HealthResponse(
+        Status: "ready",
+        Liveness: true,
+        Readiness: true,
+        Database: true,
+        Anthropic: true,
+        Details: Array.Empty<string>()));
 }).ExcludeFromDescription();
 
 string GetRateLimitPartitionKey(HttpContext context) =>
@@ -315,6 +324,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         {
             return Results.Json(new { error = "The AI provider is temporarily unavailable. Please try again shortly." }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+        catch (AnthropicProviderResponseException)
+        {
+            return Results.Json(new { error = "The AI provider returned an invalid response." }, statusCode: StatusCodes.Status502BadGateway);
+        }
         catch (HttpRequestException)
         {
             return Results.StatusCode(StatusCodes.Status502BadGateway);
@@ -333,3 +346,11 @@ MapMcpEndpoints(legacyApi);
 MapChatEndpoints(legacyApi);
 
 app.Run();
+
+internal sealed record HealthResponse(
+    string Status,
+    bool Liveness,
+    bool? Readiness,
+    bool? Database,
+    bool? Anthropic,
+    IReadOnlyList<string> Details);

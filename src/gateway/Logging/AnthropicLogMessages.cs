@@ -25,6 +25,9 @@ internal static partial class AnthropicLogMessages
     [LoggerMessage(LogLevel.Error, "HTTP error communicating with Anthropic API")]
     public static partial void HttpError(ILogger logger, Exception exception);
 
+    [LoggerMessage(LogLevel.Error, "Anthropic API returned an invalid response")]
+    public static partial void InvalidResponse(ILogger logger, Exception exception);
+
     [LoggerMessage(LogLevel.Error, "Unexpected error in AnthropicClient.SendMessageAsync")]
     public static partial void UnexpectedError(ILogger logger, Exception exception);
 }

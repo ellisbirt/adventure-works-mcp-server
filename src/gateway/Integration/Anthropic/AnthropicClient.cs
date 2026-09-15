@@ -15,6 +15,14 @@ public sealed class AnthropicProviderUnavailableException : HttpRequestException
     }
 }
 
+public sealed class AnthropicProviderResponseException : HttpRequestException
+{
+    public AnthropicProviderResponseException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 /// <summary>
 /// Integration client for Anthropic Claude API with prompt caching support.
 /// 
@@ -222,7 +230,11 @@ public class AnthropicClient : IAnthropicClient
 
             return responseText ?? string.Empty;
         }
-        catch (OperationCanceledException ex) when (ex.InnerException is TimeoutException || _requestTimeout != Timeout.InfiniteTimeSpan)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException ex)
         {
             AnthropicLogMessages.RequestTimeout(_logger, _requestTimeout.TotalSeconds);
             throw new AnthropicProviderUnavailableException($"Anthropic API request timed out after {_requestTimeout.TotalSeconds}s", ex);
@@ -241,6 +253,11 @@ public class AnthropicClient : IAnthropicClient
         {
             AnthropicLogMessages.HttpError(_logger, ex);
             throw;
+        }
+        catch (JsonException ex)
+        {
+            AnthropicLogMessages.InvalidResponse(_logger, ex);
+            throw new AnthropicProviderResponseException("Anthropic API returned an invalid response.", ex);
         }
         catch (Exception ex)
         {

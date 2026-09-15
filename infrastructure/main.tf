@@ -182,6 +182,11 @@ resource "azurerm_container_app" "gateway" {
     ignore_changes = [template[0].container[0].image]
 
     precondition {
+      condition     = var.enable_public_network_access
+      error_message = "This public demo module has no private networking. Keep enable_public_network_access=true, or add private endpoints, private DNS, and Container Apps VNet integration before disabling it."
+    }
+
+    precondition {
       condition     = var.external_id_authority != "" && var.external_id_api_audience != "" && var.external_id_spa_client_id != ""
       error_message = "External ID authority, API audience, and SPA client ID must be configured before deploying the public gateway."
     }
