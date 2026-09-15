@@ -195,7 +195,7 @@ Install and authenticate:
 - Docker, for local image builds
 - GitHub CLI, optional but useful for repository variables
 - .NET 8 SDK
-- Node.js 22+
+- Node.js 24+
 
 Login to Azure and select the target subscription:
 

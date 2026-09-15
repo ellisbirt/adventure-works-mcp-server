@@ -89,6 +89,8 @@ function gatewayStatusMessage(status: number): string {
       return 'Authentication is required. Sign in and try again.'
     case 403:
       return 'Your account is missing the required API scope.'
+    case 503:
+      return 'The database assistant is temporarily unavailable. Try again shortly.'
     case 429:
       return 'Too many requests. Wait a minute and try again.'
     default:
@@ -179,6 +181,7 @@ function App() {
 
     async function loadCatalog() {
       try {
+        setError(null)
         await mcpRequest<McpInitializeResult>('initialize', {
           protocolVersion: '2025-06-18',
           capabilities: {},
@@ -192,8 +195,9 @@ function App() {
         const catalog = parseTableCatalog(JSON.parse(catalogData.content?.[0]?.text ?? '[]'))
         setTables(catalog)
         setSelectedTable(catalog[0] ? `${catalog[0].schema}.${catalog[0].name}` : '')
-      } catch {
+      } catch (loadError) {
         setConnected(false)
+        setError(formatNetworkError(loadError, 'Unable to initialize the gateway catalog.'))
       }
     }
 
