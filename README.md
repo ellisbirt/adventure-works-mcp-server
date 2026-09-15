@@ -46,8 +46,8 @@ sequenceDiagram
 
 	B->>F: Load index.html and assets
 	B->>G: POST /api/v1/mcp initialize
-	G-->>B: JSON-RPC result + Mcp-Session-Id
-	B->>G: POST /api/v1/mcp tools/list + session header
+	G-->>B: JSON-RPC initialize result
+	B->>G: POST /api/v1/mcp tools/list
 	G-->>B: Tool definitions and input schemas
 	B->>G: POST /api/v1/mcp tools/call { schema, table, limit }
 	G->>I: Request SQL access token
@@ -133,7 +133,7 @@ POST /api/v1/mcp
 POST /api/v1/chat
 ```
 
-`POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. The versionless `/mcp` route is retained as an alias. Clients must call `initialize` first and send the returned `Mcp-Session-Id` header on subsequent requests. JSON-RPC batches are supported up to 20 requests; notifications receive no response body. The old `/mcp/tools` and `/mcp/tools/call` REST routes are removed.
+`POST /api/v1/mcp` accepts JSON-RPC 2.0 requests and supports `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`. The endpoint is stateless: `initialize` negotiates protocol capabilities but no server-side session is created or required. The versionless `/mcp` route is retained as an alias. JSON-RPC batches are supported up to 20 requests; notifications receive no response body. The old `/mcp/tools` and `/mcp/tools/call` REST routes are removed.
 
 Example tool listing request:
 
