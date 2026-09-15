@@ -42,10 +42,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _client = _factory.CreateClient();
-        var response = await PostRpcAsync(new { jsonrpc = "2.0", id = "setup", method = "initialize", @params = new { protocolVersion = "2025-06-18", capabilities = new { }, clientInfo = new { name = "test", version = "1" } } });
-        response.EnsureSuccessStatusCode();
-        var sessionId = response.Headers.GetValues("Mcp-Session-Id").Single();
-        _client.DefaultRequestHeaders.Add("Mcp-Session-Id", sessionId);
+        await Task.CompletedTask;
     }
 
     public async Task DisposeAsync()
@@ -65,7 +62,6 @@ public class McpApiEndpointsTests : IAsyncLifetime
         body.GetProperty("id").GetInt32().Should().Be(1);
         body.GetProperty("result").GetProperty("protocolVersion").GetString().Should().Be("2025-06-18");
         body.GetProperty("result").GetProperty("capabilities").GetProperty("tools").ValueKind.Should().Be(JsonValueKind.Object);
-        response.Headers.GetValues("Mcp-Session-Id").Single().Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
@@ -144,16 +140,6 @@ public class McpApiEndpointsTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         body.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32700);
-    }
-
-    [Fact]
-    public async Task ToolsList_WithoutSession_ReturnsSessionError()
-    {
-        using var client = _factory.CreateClient();
-        var response = await client.PostAsJsonAsync("/api/v1/mcp", new { jsonrpc = "2.0", id = 7, method = "tools/list", @params = new { } });
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-
-        body.GetProperty("error").GetProperty("code").GetInt32().Should().Be(-32000);
     }
 
     [Fact]

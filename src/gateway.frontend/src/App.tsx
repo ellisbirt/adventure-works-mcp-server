@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { ArrowUpRight, Check, Database, LoaderCircle, MessageCircle, Search, Send, ShieldCheck, Table2, Terminal, X } from 'lucide-react'
 import { apiScope, authenticationEnabled } from './auth'
@@ -88,7 +88,6 @@ function App() {
   const [chatResponse, setChatResponse] = useState<ChatResponse | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatLoading, setChatLoading] = useState(false)
-  const mcpSessionId = useRef<string | null>(null)
 
   async function apiHeaders() {
     const headers: Record<string, string> = { 'X-Correlation-ID': correlationId() }
@@ -102,14 +101,11 @@ function App() {
   }
 
   async function mcpRequest<T>(method: string, params: Record<string, unknown> = {}) {
-    const sessionHeader: Record<string, string> = mcpSessionId.current ? { 'Mcp-Session-Id': mcpSessionId.current } : {}
     const response = await fetch(`${apiUrl}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...sessionHeader, ...(await apiHeaders()) },
+      headers: { 'Content-Type': 'application/json', ...(await apiHeaders()) },
       body: JSON.stringify({ jsonrpc: '2.0', id: nextMcpRequestId++, method, params }),
     })
-    const returnedSessionId = response.headers.get('Mcp-Session-Id')
-    if (returnedSessionId) mcpSessionId.current = returnedSessionId
     const data = await readJson<McpRpcResponse<T>>(response)
     if (!response.ok || !data) throw new Error(`Gateway rejected the request (${response.status}).`)
     if (data.error) throw new Error(data.error.message)
