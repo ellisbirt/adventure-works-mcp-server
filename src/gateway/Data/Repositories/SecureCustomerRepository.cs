@@ -1,7 +1,7 @@
 // src/gateway/Data/Repositories/SecureCustomerRepository.cs
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
-using EnterpriseAiGateway.Data.Models;
+using EnterpriseAiGateway.Data.Scaffolded;
 
 namespace EnterpriseAiGateway.Data.Repositories;
 
@@ -42,7 +42,7 @@ public interface ISecureCustomerRepository
 /// </summary>
 public class SecureCustomerRepository : ISecureCustomerRepository
 {
-    private readonly AdventureWorksContext _context;
+    private readonly AdventureWorksDbContext _context;
     
     /// <summary>
     /// Pre-compiled, thread-safe regex engine for email address pattern matching.
@@ -69,8 +69,8 @@ public class SecureCustomerRepository : ISecureCustomerRepository
     /// Initializes a new instance of the SecureCustomerRepository with dependency-injected DbContext.
     /// Dependency injection enables testability and decouples repository from DbContext instantiation.
     /// </summary>
-    /// <param name="context">The AdventureWorksContext providing access to relational storage</param>
-    public SecureCustomerRepository(AdventureWorksContext context)
+    /// <param name="context">The scaffolded AdventureWorks context providing access to relational storage</param>
+    public SecureCustomerRepository(AdventureWorksDbContext context)
     {
         _context = context ?? throw new ArgumentNullException(nameof(context));
     }
@@ -93,7 +93,7 @@ public class SecureCustomerRepository : ISecureCustomerRepository
         // Scans CustomerID primary key index with single row seek + materialize
         var customer = await _context.Customers
             .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.CustomerID == customerId);
+            .FirstOrDefaultAsync(c => c.CustomerId == customerId);
 
         // Early return for missing customers prevents null reference errors downstream
         if (customer == null)
@@ -120,6 +120,6 @@ public class SecureCustomerRepository : ISecureCustomerRepository
 
         // Return formatted text summary suitable for LLM model context window consumption
         // Pipe-delimited format ensures easy parsing by downstream AI prompt injectors
-        return $"Customer Entity Record Detected -> ID: {customer.CustomerID} | Name: {customer.FirstName} {customer.LastName} | Company: {customer.CompanyName} | Contact: {phone} / {email}";
+        return $"Customer Entity Record Detected -> ID: {customer.CustomerId} | Name: {customer.FirstName} {customer.LastName} | Company: {customer.CompanyName} | Contact: {phone} / {email}";
     }
 }

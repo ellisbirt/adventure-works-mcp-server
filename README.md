@@ -34,7 +34,7 @@ The default deployment is intentionally public and low-cost:
 
 ### Runtime Request Flow
 
-The current customer lookup path is a governed database lookup. It does not call Claude:
+The gateway provides governed, read-only database access. It does not call Claude:
 
 ```mermaid
 sequenceDiagram
@@ -47,12 +47,12 @@ sequenceDiagram
 	B->>F: Load index.html and assets
 	B->>G: GET /mcp/tools
 	G-->>B: Tool definition and input schema
-	B->>G: POST /mcp/tools/call { customerId }
+	B->>G: POST /mcp/tools/call { schema, table, limit }
 	G->>I: Request SQL access token
 	I->>D: Authenticate as gateway identity
-	G->>D: Read customer with AsNoTracking
-	D-->>G: Customer record
-	G->>G: Mask email and phone values
+	G->>D: Read schema metadata or safe table rows
+	D-->>G: Table metadata or rows
+	G->>G: Exclude personal, contact, location, and credential columns
 	G-->>B: MCP text response
 ```
 
@@ -63,14 +63,14 @@ The `IAnthropicClient` integration is available for LLM orchestration paths, but
 The gateway is split into explicit ownership boundaries:
 
 - `Core/DTOs`: MCP request, response, tool, and content contracts.
-- `Data/Models`: EF Core database context and customer entity mapping.
+- `Data/Scaffolded`: database-first EF Core context and generated `SalesLT` entities. Regenerate these files rather than editing them directly.
 - `Data/Repositories`: SQL access and PII masking policy.
 - `Integration/Anthropic`: typed Anthropic contracts and HTTP client.
 - `Logging`: source-generated structured log messages.
 - `Program.cs`: dependency injection, CORS, Serilog/Application Insights, and minimal API routes.
 - `src/gateway.frontend`: browser UI and development proxy.
 
-The repository boundary prevents database entities from leaking directly into the API. The repository returns formatted, masked context; the endpoint returns MCP DTOs rather than EF entities.
+The repository boundary prevents database entities from leaking directly into the API. The table catalog allows only SQL metadata identifiers and projects non-sensitive columns; endpoints return MCP DTOs rather than EF entities.
 
 ### Identity and Secret Flow
 
@@ -124,9 +124,23 @@ The gateway exposes:
 ```text
 GET  /mcp/tools
 POST /mcp/tools/call
+POST /chat
 ```
 
-`GET /mcp/tools` advertises the `get_customer_history` tool and its JSON schema. `POST /mcp/tools/call` validates the tool name and integer customer ID, forces PII masking, queries SQL, and returns an MCP response. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
+`GET /mcp/tools` advertises `get_customer_history`, `list_database_tables`, and `read_database_table`. The catalog tool returns every user table with only approved columns. The read tool requires catalog-provided schema and table names and permits 1-100 rows. Personal, contact, location, financial, and credential fields are excluded before rows are returned.
+
+`POST /chat` accepts `{ "message": "..." }`. When `Anthropic:ApiKey` is configured, the gateway asks Claude to select from its MCP catalog, validates that selection against the safe catalog, executes the operation, and asks Claude to answer using only that MCP result. The browser never receives the Anthropic key or direct database access. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
+
+### Regenerating The EF Model
+
+The `Data/Scaffolded` model is generated from the `SalesLT` schema and intentionally has no embedded connection string. After installing `dotnet-ef` and authenticating to Azure SQL with Azure CLI, refresh it with:
+
+```bash
+export ADVENTURE_WORKS_CONNECTION_STRING="Server=tcp:...;Authentication=Active Directory Default;..."
+./scripts/refresh-ef-model.sh
+```
+
+Keep gateway-specific extensions in separate partial classes under `Data/Scaffolded/Entities` so regeneration does not overwrite them.
 
 ## Important Security Note
 

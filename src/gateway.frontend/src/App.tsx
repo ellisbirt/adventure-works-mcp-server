@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowUpRight, Check, Database, LoaderCircle, Search, ShieldCheck, Terminal, X } from 'lucide-react'
+import { ArrowUpRight, Check, Database, LoaderCircle, MessageCircle, Search, Send, ShieldCheck, Table2, Terminal, X } from 'lucide-react'
 import './App.css'
 
 type ToolResponse = {
@@ -15,6 +15,17 @@ type CallResponse = {
   isError: boolean
 }
 
+type TableDefinition = {
+  schema: string
+  name: string
+  columns: string[]
+}
+
+type ChatResponse = {
+  message: string
+  tool: string
+}
+
 const apiUrl = import.meta.env.VITE_GATEWAY_URL
   ? `${import.meta.env.VITE_GATEWAY_URL.replace(/\/$/, '')}/api/v1`
   : '/api/v1'
@@ -24,12 +35,18 @@ function correlationId() {
 }
 
 function App() {
-  const [customerId, setCustomerId] = useState('')
+  const [tables, setTables] = useState<TableDefinition[]>([])
+  const [selectedTable, setSelectedTable] = useState('')
+  const [rowLimit, setRowLimit] = useState('20')
   const [tool, setTool] = useState<ToolResponse['tools'][number] | null>(null)
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [chatMessage, setChatMessage] = useState('')
+  const [chatResponse, setChatResponse] = useState<ChatResponse | null>(null)
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [chatLoading, setChatLoading] = useState(false)
 
   useEffect(() => {
     fetch(`${apiUrl}/mcp/tools`, {
@@ -42,17 +59,30 @@ function App() {
       .then((data) => {
         setTool(data.tools[0] ?? null)
         setConnected(true)
+        return fetch(`${apiUrl}/mcp/tools/call`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': correlationId() },
+          body: JSON.stringify({ name: 'list_database_tables', arguments: {} }),
+        })
+      })
+      .then((response) => response.json() as Promise<CallResponse>)
+      .then((data) => {
+        const catalog = JSON.parse(data.content?.[0]?.text ?? '[]') as TableDefinition[]
+        setTables(catalog)
+        setSelectedTable(catalog[0] ? `${catalog[0].schema}.${catalog[0].name}` : '')
       })
       .catch(() => setConnected(false))
   }, [])
 
-  async function searchCustomer(event: React.FormEvent<HTMLFormElement>) {
+  async function readTable(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
     setResult(null)
 
-    if (!/^\d+$/.test(customerId)) {
-      setError('Enter a numeric customer ID to continue.')
+    const [schema, table] = selectedTable.split('.')
+    const limit = Number(rowLimit)
+    if (!schema || !table || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+      setError('Choose a table and a row limit from 1 through 100.')
       return
     }
 
@@ -64,7 +94,7 @@ function App() {
           'Content-Type': 'application/json',
           'X-Correlation-ID': correlationId(),
         },
-        body: JSON.stringify({ name: 'get_customer_history', arguments: { customerId: Number(customerId) } }),
+        body: JSON.stringify({ name: 'read_database_table', arguments: { schema, table, limit } }),
       })
       const data = (await response.json()) as CallResponse
       if (!response.ok || data.isError) throw new Error(data.content?.[0]?.text ?? 'The gateway rejected this request.')
@@ -73,6 +103,35 @@ function App() {
       setError(requestError instanceof Error ? requestError.message : 'Unable to reach the gateway.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function sendChatMessage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setChatError(null)
+    setChatResponse(null)
+    if (!chatMessage.trim()) {
+      setChatError('Enter a question for the database assistant.')
+      return
+    }
+
+    setChatLoading(true)
+    try {
+      const response = await fetch(`${apiUrl}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Correlation-ID': correlationId() },
+        body: JSON.stringify({ message: chatMessage.trim() }),
+      })
+      const data = (await response.json()) as ChatResponse | { error?: string }
+      if (!response.ok || !('message' in data)) {
+        const errorMessage = 'error' in data ? data.error : undefined
+        throw new Error(errorMessage ?? 'The database assistant is unavailable.')
+      }
+      setChatResponse(data)
+    } catch (requestError) {
+      setChatError(requestError instanceof Error ? requestError.message : 'Unable to reach the database assistant.')
+    } finally {
+      setChatLoading(false)
     }
   }
 
@@ -88,15 +147,17 @@ function App() {
         </header>
 
         <section className="grid gap-12 pb-16 pt-14 lg:grid-cols-[1.05fr_0.95fr] lg:items-end lg:pt-24">
-          <div><p className="mb-5 font-mono text-xs uppercase tracking-[0.25em] text-coral">MCP / Customer context</p><h1 className="max-w-3xl font-display text-5xl font-bold leading-[0.95] tracking-[-0.06em] sm:text-7xl lg:text-[6.7rem]">Ask the <span className="text-moss">source.</span></h1><p className="mt-7 max-w-xl text-base leading-7 text-moss sm:text-lg">Retrieve governed customer context through the gateway. Sensitive contact fields are masked before they reach the model boundary.</p></div>
-          <div className="relative border-l border-ink/15 pl-6 lg:mb-2"><div className="absolute -left-[5px] top-0 size-2.5 rounded-full bg-coral" /><p className="font-mono text-[10px] uppercase tracking-[0.2em] text-moss">Active tool</p><h2 className="mt-3 font-display text-2xl font-bold">{tool?.name ?? 'get_customer_history'}</h2><p className="mt-2 max-w-sm text-sm leading-6 text-moss">{tool?.description ?? 'Loading tool definition from gateway...'}</p></div>
+          <div><p className="mb-5 font-mono text-xs uppercase tracking-[0.25em] text-coral">MCP / Governed data catalog</p><h1 className="max-w-3xl font-display text-5xl font-bold leading-[0.95] tracking-[-0.06em] sm:text-7xl lg:text-[6.7rem]">Ask the <span className="text-moss">source.</span></h1><p className="mt-7 max-w-xl text-base leading-7 text-moss">Browse every available database table through the gateway. Personal, contact, location, and credential fields are excluded before data reaches the model boundary.</p></div>
+          <div className="relative border-l border-ink/15 pl-6 lg:mb-2"><div className="absolute -left-[5px] top-0 size-2.5 rounded-full bg-coral" /><p className="font-mono text-[10px] uppercase tracking-[0.2em] text-moss">Catalog</p><h2 data-testid="catalog-table-count" className="mt-3 font-display text-2xl font-bold">{tables.length} safe tables</h2><p className="mt-2 max-w-sm text-sm leading-6 text-moss">{tool?.description ?? 'Loading gateway tool definitions...'}</p></div>
         </section>
 
-        <section className="grid gap-5 border-t border-ink/15 py-7 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-moss"><Database size={15} /><span>Customer lookup</span><ArrowUpRight size={14} className="ml-auto" /></div><form onSubmit={searchCustomer} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="customer-id">Customer ID</label><input id="customer-id" value={customerId} onChange={(event) => setCustomerId(event.target.value)} placeholder="Enter customer ID" inputMode="numeric" className="min-h-14 flex-1 border-b-2 border-ink bg-transparent px-1 font-mono text-lg outline-none placeholder:text-moss/50 focus:border-coral" /><button type="submit" disabled={loading || !connected} className="inline-flex min-h-14 items-center justify-center gap-2 bg-ink px-6 font-mono text-xs uppercase tracking-[0.15em] text-paper transition hover:bg-moss disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />}Query source</button></form></section>
+        <section className="grid gap-5 border-t border-ink/15 py-7 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-moss"><Database size={15} /><span>Table browser</span><ArrowUpRight size={14} className="ml-auto" /></div><form onSubmit={readTable} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="table">Database table</label><select data-testid="table-selector" id="table" value={selectedTable} onChange={(event) => setSelectedTable(event.target.value)} disabled={!tables.length} className="min-h-14 flex-1 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none focus:border-coral"><option value="">Select a table</option>{tables.map((item) => <option data-testid={`table-option-${item.schema}-${item.name}`} key={`${item.schema}.${item.name}`} value={`${item.schema}.${item.name}`}>{item.schema}.{item.name} ({item.columns.length} safe columns)</option>)}</select><label className="sr-only" htmlFor="row-limit">Rows</label><input data-testid="row-limit-input" id="row-limit" value={rowLimit} onChange={(event) => setRowLimit(event.target.value)} inputMode="numeric" className="min-h-14 w-24 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none focus:border-coral" /><button data-testid="read-rows-button" type="submit" disabled={loading || !connected || !selectedTable} className="inline-flex min-h-14 items-center justify-center gap-2 bg-ink px-6 font-mono text-xs uppercase tracking-[0.15em] text-paper transition hover:bg-moss disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />}Read rows</button></form></section>
 
-        <section className="grid gap-5 pb-16 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 border-t border-ink/15 pt-5 text-sm text-moss"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-coral" /><p>Governance boundary active. Email and phone values are redacted in the returned context.</p></div><div className="min-h-44 border border-ink/15 bg-white/35 p-5">{error ? <div className="flex items-start gap-3 text-coral"><X size={18} className="mt-0.5" /><p>{error}</p></div> : result ? <div><div className="mb-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700"><Check size={15} />Source response</div><p className="whitespace-pre-wrap font-mono text-sm leading-7 text-ink">{result}</p></div> : <div className="grid min-h-32 place-items-center text-center font-mono text-xs uppercase tracking-[0.15em] text-moss/60">Response will appear here</div>}</div></section>
+        <section className="grid gap-5 pb-16 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 border-t border-ink/15 pt-5 text-sm text-moss"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-coral" /><p>Governance boundary active. Personal, contact, location, and credential fields are never returned.</p></div><div className="min-h-44 border border-ink/15 bg-white/35 p-5">{error ? <div data-testid="gateway-error" className="flex items-start gap-3 text-coral"><X size={18} className="mt-0.5" /><p>{error}</p></div> : result ? <div data-testid="source-response"><div className="mb-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700"><Check size={15} />Source response</div><p className="whitespace-pre-wrap break-words font-mono text-sm leading-7 text-ink">{result}</p></div> : <div className="grid min-h-32 place-items-center text-center font-mono text-xs uppercase tracking-[0.15em] text-moss/60"><Table2 size={16} className="mr-2" />Select a table to inspect its safe rows</div>}</div></section>
 
-        <footer className="flex flex-col gap-3 border-t border-ink/15 py-5 font-mono text-[10px] uppercase tracking-[0.16em] text-moss sm:flex-row sm:justify-between"><span>Secure customer grounding</span><span>Gateway protocol / MCP</span></footer>
+        <section className="grid gap-5 border-t border-ink/15 py-10 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 pt-1 text-sm text-moss"><MessageCircle size={18} className="mt-0.5 shrink-0 text-coral" /><p>Ask in plain language. The assistant selects only from the governed MCP catalog and returns an answer grounded in its safe tool result.</p></div><div className="border border-ink/15 bg-white/35 p-5"><form onSubmit={sendChatMessage} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="chat-message">Question for database assistant</label><input data-testid="chat-message-input" id="chat-message" value={chatMessage} onChange={(event) => setChatMessage(event.target.value)} placeholder="Ask about products, categories, or orders" className="min-h-14 flex-1 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none placeholder:text-moss/50 focus:border-coral" /><button data-testid="chat-send-button" type="submit" disabled={chatLoading || !connected} className="inline-flex min-h-14 items-center justify-center gap-2 bg-coral px-6 font-mono text-xs uppercase tracking-[0.15em] text-ink transition hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40">{chatLoading ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={17} />}Ask assistant</button></form>{chatError ? <div data-testid="chat-error" className="mt-5 text-sm text-coral">{chatError}</div> : chatResponse ? <div data-testid="chat-response" className="mt-5 border-t border-ink/15 pt-4"><p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700">MCP / {chatResponse.tool}</p><p className="whitespace-pre-wrap break-words text-sm leading-7 text-ink">{chatResponse.message}</p></div> : null}</div></section>
+
+        <footer className="flex flex-col gap-3 border-t border-ink/15 py-5 font-mono text-[10px] uppercase tracking-[0.16em] text-moss sm:flex-row sm:justify-between"><span>Secure database grounding</span><span>Gateway protocol / MCP</span></footer>
       </div>
     </main>
   )

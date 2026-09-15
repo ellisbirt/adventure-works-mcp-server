@@ -3,8 +3,9 @@ using Moq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using EnterpriseAiGateway.Data.Models;
 using EnterpriseAiGateway.Data.Repositories;
+using EnterpriseAiGateway.Data.Scaffolded;
+using EntityCustomer = EnterpriseAiGateway.Data.Scaffolded.Entities.Customer;
 using EnterpriseAiGateway.Integration.Anthropic;
 using Xunit;
 
@@ -33,15 +34,15 @@ public class DependencyInjectionTests
             .Build();
 
         // Act
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
 
         var provider = services.BuildServiceProvider();
-        var context = provider.GetService<AdventureWorksContext>();
+        var context = provider.GetService<AdventureWorksDbContext>();
 
         // Assert
         context.Should().NotBeNull();
-        context.Should().BeOfType<AdventureWorksContext>();
+        context.Should().BeOfType<AdventureWorksDbContext>();
     }
 
     [Fact]
@@ -49,15 +50,15 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
 
         var provider = services.BuildServiceProvider();
-        var context = provider.GetService<AdventureWorksContext>();
+        var context = provider.GetService<AdventureWorksDbContext>();
 
         // Act & Assert
         context!.Customers.Should().NotBeNull();
-        context.Customers.Should().BeAssignableTo<DbSet<Customer>>();
+        context.Customers.Should().BeAssignableTo<DbSet<EntityCustomer>>();
     }
 
     [Fact]
@@ -65,13 +66,13 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb" + Guid.NewGuid()));
 
         var provider = services.BuildServiceProvider();
-        var context = provider.GetService<AdventureWorksContext>();
+        var context = provider.GetService<AdventureWorksDbContext>();
 
-        var customer = new Customer
+        var customer = new EntityCustomer
         {
             CustomerID = 1,
             FirstName = "Test",
@@ -98,7 +99,7 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
@@ -115,7 +116,7 @@ public class DependencyInjectionTests
     {
         // Arrange
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
@@ -142,7 +143,7 @@ public class DependencyInjectionTests
         // Arrange
         var databaseName = "TestDb" + Guid.NewGuid();
         var services = new ServiceCollection();
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase(databaseName));
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 
@@ -150,8 +151,8 @@ public class DependencyInjectionTests
 
         using (var scope = provider.CreateScope())
         {
-            var context = scope.ServiceProvider.GetService<AdventureWorksContext>();
-            var customer = new Customer { CustomerID = 1, FirstName = "John", LastName = "Doe" };
+            var context = scope.ServiceProvider.GetService<AdventureWorksDbContext>();
+            var customer = new EntityCustomer { CustomerID = 1, FirstName = "John", LastName = "Doe" };
             context!.Customers.Add(customer);
             await context.SaveChangesAsync();
         }
@@ -292,7 +293,7 @@ public class DependencyInjectionTests
             .Build();
 
         // Act
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
         services.AddHttpClient();
@@ -301,7 +302,7 @@ public class DependencyInjectionTests
 
         var provider = services.BuildServiceProvider();
 
-        var context = provider.GetService<AdventureWorksContext>();
+        var context = provider.GetService<AdventureWorksDbContext>();
         var repository = provider.GetService<ISecureCustomerRepository>();
         var anthropicClient = provider.GetService<IAnthropicClient>();
 
@@ -323,7 +324,7 @@ public class DependencyInjectionTests
             })
             .Build();
 
-        services.AddDbContext<AdventureWorksContext>(options =>
+        services.AddDbContext<AdventureWorksDbContext>(options =>
             options.UseInMemoryDatabase("TestDb"));
         services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
         services.AddHttpClient();
@@ -331,7 +332,7 @@ public class DependencyInjectionTests
         services.AddAnthropicClient(configuration);
 
         // Act - Verify lifetimes
-        var dbContextDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(AdventureWorksContext));
+        var dbContextDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(AdventureWorksDbContext));
         var repositoryDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(ISecureCustomerRepository));
         var anthropicDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(IAnthropicClient));
 

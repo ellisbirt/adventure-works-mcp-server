@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Moq;
-using EnterpriseAiGateway.Data.Models;
 using EnterpriseAiGateway.Data.Repositories;
+using EnterpriseAiGateway.Data.Scaffolded.Entities;
 using EnterpriseAiGateway.Tests.Fixtures;
 using Xunit;
 
@@ -13,11 +13,11 @@ namespace EnterpriseAiGateway.Tests.Repositories;
 /// </summary>
 public class SecureCustomerRepositoryTests : IDisposable
 {
-    private readonly InMemoryDatabaseFixture _fixture;
+    private readonly ScaffoldedInMemoryDatabaseFixture _fixture;
 
     public SecureCustomerRepositoryTests()
     {
-        _fixture = new InMemoryDatabaseFixture();
+        _fixture = new ScaffoldedInMemoryDatabaseFixture();
     }
 
     #region GetCustomerContextAsync Tests

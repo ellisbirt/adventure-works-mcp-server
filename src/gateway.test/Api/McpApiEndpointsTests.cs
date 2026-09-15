@@ -6,8 +6,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using EnterpriseAiGateway.Core.DTOs;
-using EnterpriseAiGateway.Data.Models;
 using EnterpriseAiGateway.Data.Repositories;
+using EnterpriseAiGateway.Data.Scaffolded;
 using EnterpriseAiGateway.Tests.Fixtures;
 using Xunit;
 
@@ -21,6 +21,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
 {
     private readonly WebApplicationFactory<Program> _factory;
     private readonly MockRepository _mockRepository = new(MockBehavior.Loose);
+    private readonly Mock<ISecureTableCatalogRepository> _tableCatalog = new(MockBehavior.Strict);
     private HttpClient _client = null!;
 
     public McpApiEndpointsTests()
@@ -32,7 +33,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
                 {
                     // Remove the real DbContext registration
                     var dbContextDescriptor = services.FirstOrDefault(
-                        d => d.ServiceType == typeof(DbContextOptions<AdventureWorksContext>));
+                        d => d.ServiceType == typeof(DbContextOptions<AdventureWorksDbContext>));
                     if (dbContextDescriptor != null)
                     {
                         services.Remove(dbContextDescriptor);
@@ -45,13 +46,28 @@ public class McpApiEndpointsTests : IAsyncLifetime
                         services.Remove(repositoryDescriptor);
                     }
 
+                    var tableCatalogDescriptor = services.FirstOrDefault(
+                        d => d.ServiceType == typeof(ISecureTableCatalogRepository));
+                    if (tableCatalogDescriptor != null)
+                    {
+                        services.Remove(tableCatalogDescriptor);
+                    }
+
                     // Use in-memory database for tests
-                    services.AddDbContext<AdventureWorksContext>(options =>
+                    services.AddDbContext<AdventureWorksDbContext>(options =>
                         options.UseInMemoryDatabase("TestDb"));
                     
                     // Register real repository with in-memory context
                     services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
+                    services.AddScoped(_ => _tableCatalog.Object);
                 });
+            });
+
+        _tableCatalog
+            .Setup(repository => repository.GetTablesAsync())
+            .ReturnsAsync(new List<SafeTableDefinition>
+            {
+                new("SalesLT", "Product", new List<string> { "ProductID", "Name", "ListPrice" })
             });
     }
 
@@ -129,6 +145,16 @@ public class McpApiEndpointsTests : IAsyncLifetime
         content.Should().Contain("customerId");
     }
 
+    [Fact]
+    public async Task GetTools_IncludesSafeTableCatalogTools()
+    {
+        var response = await _client.GetAsync("/mcp/tools");
+        var content = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        content.Should().Contain("list_database_tables").And.Contain("read_database_table");
+    }
+
     #endregion
 
     #region POST /mcp/tools/call - Valid Requests Tests
@@ -191,6 +217,51 @@ public class McpApiEndpointsTests : IAsyncLifetime
 
         // Assert
         responseContent.Should().Contain("\"isError\":false");
+    }
+
+    [Fact]
+    public async Task CallTool_ListDatabaseTables_ReturnsOnlySafeCatalogMetadata()
+    {
+        var request = new McpCallToolRequest("list_database_tables", new Dictionary<string, object>());
+        var response = await PostToolRequest(request);
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        responseContent.Should().Contain("ProductID").And.NotContain("EmailAddress");
+    }
+
+    [Fact]
+    public async Task CallTool_ReadDatabaseTable_UsesBoundedRequest()
+    {
+        _tableCatalog
+            .Setup(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2))
+            .ReturnsAsync("[{\"ProductID\":1,\"Name\":\"Road Bike\"}]");
+        var request = new McpCallToolRequest("read_database_table", new Dictionary<string, object>
+        {
+            { "schema", "SalesLT" }, { "table", "Product" }, { "limit", 2 }
+        });
+
+        var response = await PostToolRequest(request);
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        responseContent.Should().Contain("Road Bike");
+        _tableCatalog.Verify(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2), Times.Once);
+    }
+
+    [Fact]
+    public async Task CallTool_ReadDatabaseTable_WithLimitOver100_ReturnsBadRequest()
+    {
+        var request = new McpCallToolRequest("read_database_table", new Dictionary<string, object>
+        {
+            { "schema", "SalesLT" }, { "table", "Product" }, { "limit", 101 }
+        });
+
+        var response = await PostToolRequest(request);
+        var responseContent = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        responseContent.Should().Contain("1 through 100");
     }
 
     #endregion
@@ -450,4 +521,10 @@ public class McpApiEndpointsTests : IAsyncLifetime
     }
 
     #endregion
+
+    private async Task<HttpResponseMessage> PostToolRequest(McpCallToolRequest request)
+    {
+        var json = JsonSerializer.Serialize(request, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return await _client.PostAsync("/mcp/tools/call", new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+    }
 }
