@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useIsAuthenticated, useMsal } from '@azure/msal-react'
 import { ArrowUpRight, Check, Database, LoaderCircle, MessageCircle, Search, Send, ShieldCheck, Table2, Terminal, X } from 'lucide-react'
 import { apiScope, authenticationEnabled } from './auth'
@@ -15,6 +15,17 @@ type ToolResponse = {
 type CallResponse = {
   content: Array<{ type: string; text: string }>
   isError: boolean
+}
+
+type McpRpcResponse<T> = {
+  result?: T
+  error?: { message: string }
+}
+
+type McpInitializeResult = {
+  protocolVersion: string
+  capabilities: { tools?: Record<string, unknown> }
+  serverInfo: { name: string; version: string }
 }
 
 type TableDefinition = {
@@ -55,6 +66,8 @@ function correlationId() {
   return crypto.randomUUID()
 }
 
+let nextMcpRequestId = 1
+
 async function readJson<T>(response: Response): Promise<T | null> {
   const body = await response.text()
   return body ? JSON.parse(body) as T : null
@@ -75,6 +88,7 @@ function App() {
   const [chatResponse, setChatResponse] = useState<ChatResponse | null>(null)
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatLoading, setChatLoading] = useState(false)
+  const mcpSessionId = useRef<string | null>(null)
 
   async function apiHeaders() {
     const headers: Record<string, string> = { 'X-Correlation-ID': correlationId() }
@@ -85,6 +99,22 @@ function App() {
     const token = await instance.acquireTokenSilent({ account, scopes: [apiScope] })
     headers.Authorization = `Bearer ${token.accessToken}`
     return headers
+  }
+
+  async function mcpRequest<T>(method: string, params: Record<string, unknown> = {}) {
+    const sessionHeader: Record<string, string> = mcpSessionId.current ? { 'Mcp-Session-Id': mcpSessionId.current } : {}
+    const response = await fetch(`${apiUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...sessionHeader, ...(await apiHeaders()) },
+      body: JSON.stringify({ jsonrpc: '2.0', id: nextMcpRequestId++, method, params }),
+    })
+    const returnedSessionId = response.headers.get('Mcp-Session-Id')
+    if (returnedSessionId) mcpSessionId.current = returnedSessionId
+    const data = await readJson<McpRpcResponse<T>>(response)
+    if (!response.ok || !data) throw new Error(`Gateway rejected the request (${response.status}).`)
+    if (data.error) throw new Error(data.error.message)
+    if (data.result === undefined) throw new Error('Gateway returned an empty MCP result.')
+    return data.result
   }
 
   function signIn() {
@@ -100,20 +130,16 @@ function App() {
 
     async function loadCatalog() {
       try {
-        const headers = await apiHeaders()
-        const toolsResponse = await fetch(`${apiUrl}/mcp/tools`, { headers })
-        if (!toolsResponse.ok) throw new Error('Gateway unavailable')
-        const data = await toolsResponse.json() as ToolResponse
+        await mcpRequest<McpInitializeResult>('initialize', {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'grounding-desk', version: '1.0.0' },
+        })
+        const data = await mcpRequest<ToolResponse>('tools/list')
         setTool(data.tools[0] ?? null)
         setConnected(true)
 
-        const catalogResponse = await fetch(`${apiUrl}/mcp/tools/call`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...headers },
-          body: JSON.stringify({ name: 'list_database_tables', arguments: {} }),
-        })
-        if (!catalogResponse.ok) throw new Error('Gateway unavailable')
-        const catalogData = await catalogResponse.json() as CallResponse
+        const catalogData = await mcpRequest<CallResponse>('tools/call', { name: 'list_database_tables', arguments: {} })
         const catalog = parseTableCatalog(JSON.parse(catalogData.content?.[0]?.text ?? '[]'))
         setTables(catalog)
         setSelectedTable(catalog[0] ? `${catalog[0].schema}.${catalog[0].name}` : '')
@@ -139,16 +165,7 @@ function App() {
 
     setLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/mcp/tools/call`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(await apiHeaders()),
-        },
-        body: JSON.stringify({ name: 'read_database_table', arguments: { schema, table, limit } }),
-      })
-      const data = await readJson<CallResponse>(response)
-      if (!response.ok) throw new Error(`Gateway rejected the request (${response.status}).`)
+      const data = await mcpRequest<CallResponse>('tools/call', { name: 'read_database_table', arguments: { schema, table, limit } })
       if (!data || data.isError) throw new Error(data?.content?.[0]?.text ?? 'The gateway rejected this request.')
       setResult(data.content?.[0]?.text ?? 'No customer context returned.')
     } catch (requestError) {
@@ -199,13 +216,13 @@ function App() {
         </header>
 
         <section className="grid gap-12 pb-16 pt-14 lg:grid-cols-[1.05fr_0.95fr] lg:items-end lg:pt-24">
-          <div><p className="mb-5 font-mono text-xs uppercase tracking-[0.25em] text-coral">MCP / Governed data catalog</p><h1 className="max-w-3xl font-display text-5xl font-bold leading-[0.95] tracking-[-0.06em] sm:text-7xl lg:text-[6.7rem]">Ask the <span className="text-moss">source.</span></h1><p className="mt-7 max-w-xl text-base leading-7 text-moss">Browse every available database table through the gateway. Personal, contact, location, and credential fields are excluded before data reaches the model boundary.</p></div>
+          <div><p className="mb-5 font-mono text-xs uppercase tracking-[0.25em] text-coral">MCP / Governed data catalog</p><h1 className="max-w-3xl font-display text-5xl font-bold leading-[0.95] tracking-[-0.06em] sm:text-7xl lg:text-[6.7rem]">Ask the <span className="text-moss">source.</span></h1><p className="mt-7 max-w-xl text-base leading-7 text-moss">Browse every available database table through the gateway. Personal, contact, and location fields are redacted and marked before data reaches the model boundary.</p></div>
           <div className="relative border-l border-ink/15 pl-6 lg:mb-2"><div className="absolute -left-[5px] top-0 size-2.5 rounded-full bg-coral" /><p className="font-mono text-[10px] uppercase tracking-[0.2em] text-moss">Catalog</p><h2 data-testid="catalog-table-count" className="mt-3 font-display text-2xl font-bold">{tables.length} safe tables</h2><p className="mt-2 max-w-sm text-sm leading-6 text-moss">{tool?.description ?? 'Loading gateway tool definitions...'}</p></div>
         </section>
 
         <section className="grid gap-5 border-t border-ink/15 py-7 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-moss"><Database size={15} /><span>Table browser</span><ArrowUpRight size={14} className="ml-auto" /></div><form onSubmit={readTable} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="table">Database table</label><select data-testid="table-selector" id="table" value={selectedTable} onChange={(event) => setSelectedTable(event.target.value)} disabled={!tables.length} className="min-h-14 flex-1 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none focus:border-coral"><option value="">Select a table</option>{tables.map((item) => <option data-testid={`table-option-${item.schema}-${item.name}`} key={`${item.schema}.${item.name}`} value={`${item.schema}.${item.name}`}>{item.schema}.{item.name} ({item.columns.length} safe columns)</option>)}</select><label className="sr-only" htmlFor="row-limit">Rows</label><input data-testid="row-limit-input" id="row-limit" value={rowLimit} onChange={(event) => setRowLimit(event.target.value)} inputMode="numeric" className="min-h-14 w-24 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none focus:border-coral" /><button data-testid="read-rows-button" type="submit" disabled={loading || !connected || !selectedTable} className="inline-flex min-h-14 items-center justify-center gap-2 bg-ink px-6 font-mono text-xs uppercase tracking-[0.15em] text-paper transition hover:bg-moss disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle size={17} className="animate-spin" /> : <Search size={17} />}Read rows</button></form></section>
 
-        <section className="grid gap-5 pb-16 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 border-t border-ink/15 pt-5 text-sm text-moss"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-coral" /><p>Governance boundary active. Personal, contact, location, and credential fields are never returned.</p></div><div className="min-h-44 border border-ink/15 bg-white/35 p-5">{error ? <div data-testid="gateway-error" className="flex items-start gap-3 text-coral"><X size={18} className="mt-0.5" /><p>{error}</p></div> : result ? <div data-testid="source-response"><div className="mb-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700"><Check size={15} />Source response</div><p className="whitespace-pre-wrap break-words font-mono text-sm leading-7 text-ink">{result}</p></div> : <div className="grid min-h-32 place-items-center text-center font-mono text-xs uppercase tracking-[0.15em] text-moss/60"><Table2 size={16} className="mr-2" />Select a table to inspect its safe rows</div>}</div></section>
+        <section className="grid gap-5 pb-16 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 border-t border-ink/15 pt-5 text-sm text-moss"><ShieldCheck size={18} className="mt-0.5 shrink-0 text-coral" /><p>Governance boundary active. Credential fields are never returned; personal, contact, and location fields are redacted and marked.</p></div><div className="min-h-44 border border-ink/15 bg-white/35 p-5">{error ? <div data-testid="gateway-error" className="flex items-start gap-3 text-coral"><X size={18} className="mt-0.5" /><p>{error}</p></div> : result ? <div data-testid="source-response"><div className="mb-4 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700"><Check size={15} />Source response</div><p className="whitespace-pre-wrap break-words font-mono text-sm leading-7 text-ink">{result}</p></div> : <div className="grid min-h-32 place-items-center text-center font-mono text-xs uppercase tracking-[0.15em] text-moss/60"><Table2 size={16} className="mr-2" />Select a table to inspect its safe rows</div>}</div></section>
 
         <section className="grid gap-5 border-t border-ink/15 py-10 lg:grid-cols-[0.75fr_1.25fr]"><div className="flex gap-3 pt-1 text-sm text-moss"><MessageCircle size={18} className="mt-0.5 shrink-0 text-coral" /><p>Ask in plain language. The assistant selects only from the governed MCP catalog and returns an answer grounded in its safe tool result.</p></div><div className="border border-ink/15 bg-white/35 p-5"><form onSubmit={sendChatMessage} className="flex flex-col gap-3 sm:flex-row"><label className="sr-only" htmlFor="chat-message">Question for database assistant</label><input data-testid="chat-message-input" id="chat-message" value={chatMessage} onChange={(event) => setChatMessage(event.target.value)} placeholder="Ask about products, categories, or orders" className="min-h-14 flex-1 border-b-2 border-ink bg-transparent px-1 font-mono text-sm outline-none placeholder:text-moss/50 focus:border-coral" /><button data-testid="chat-send-button" type="submit" disabled={chatLoading || !connected} className="inline-flex min-h-14 items-center justify-center gap-2 bg-coral px-6 font-mono text-xs uppercase tracking-[0.15em] text-ink transition hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40">{chatLoading ? <LoaderCircle size={17} className="animate-spin" /> : <Send size={17} />}Ask assistant</button></form>{chatError ? <div data-testid="chat-error" className="mt-5 text-sm text-coral">{chatError}</div> : chatResponse ? <div data-testid="chat-response" className="mt-5 border-t border-ink/15 pt-4"><p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-emerald-700">MCP / {chatResponse.tool}</p><p className="whitespace-pre-wrap break-words text-sm leading-7 text-ink">{chatResponse.message}</p></div> : null}</div></section>
 

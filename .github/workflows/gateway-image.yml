@@ -41,7 +41,14 @@ jobs:
         run: dotnet restore src/gateway.test/gateway.test.csproj
 
       - name: Test gateway
-        run: dotnet test src/gateway.test/gateway.test.csproj --configuration Release --no-restore
+        run: dotnet test src/gateway.test/gateway.test.csproj --configuration Release --no-restore --collect:"XPlat Code Coverage" --results-directory ./TestResults
+
+      - name: Upload gateway coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-coverage-${{ github.sha }}
+          path: TestResults/**/coverage.cobertura.xml
+          if-no-files-found: error
 
       - name: Setup Node.js
         uses: actions/setup-node@v5

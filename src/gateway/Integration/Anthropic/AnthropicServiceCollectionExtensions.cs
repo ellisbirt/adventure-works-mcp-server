@@ -5,35 +5,12 @@ using Polly;
 
 namespace EnterpriseAiGateway.Integration.Anthropic;
 
-/// <summary>
-/// Dependency injection extension methods for Anthropic integration services.
-/// Enables clean service registration in Program.cs with configuration-driven setup.
-/// </summary>
 public static class AnthropicServiceCollectionExtensions
 {
-    /// <summary>
-    /// Registers AnthropicClient with HttpClientFactory and configuration-based API credentials.
-    /// 
-    /// Configuration Requirements:
-    /// Add to appsettings.json:
-    /// {
-    ///   "Anthropic": {
-    ///     "ApiKey": "sk-ant-...",
-    ///     "Model": "claude-3-5-sonnet-20241022",
-    ///     "MaxTokens": 1024,
-    ///     "RequestTimeoutSeconds": 30
-    ///   }
-    /// }
-    /// 
-    /// Usage in Program.cs:
-    /// var configuration = builder.Configuration;
-    /// builder.Services.AddAnthropicClient(configuration);
-    /// </summary>
     public static IServiceCollection AddAnthropicClient(
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        // Extract Anthropic configuration section
         var anthropicConfig = configuration.GetSection("Anthropic");
 
         var apiKey = anthropicConfig["ApiKey"] 
@@ -46,10 +23,10 @@ public static class AnthropicServiceCollectionExtensions
         var retryDelaySeconds = double.TryParse(anthropicConfig["RetryDelaySeconds"], out var delay) ? Math.Clamp(delay, 0.1, 10) : 1;
         var circuitBreakSeconds = int.TryParse(anthropicConfig["CircuitBreakDurationSeconds"], out var breakDuration) ? Math.Clamp(breakDuration, 5, 120) : 30;
 
-        // Register named HttpClient for Anthropic API communication
         services.AddHttpClient("AnthropicClient", client =>
         {
-            // HttpClient base configuration (headers added per-request in AnthropicClient)
+            // Auth/beta headers are added per-request in AnthropicClient rather than here, since
+            // this factory-managed client is reused for the app's lifetime.
             client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
         })
         .AddStandardResilienceHandler(options =>
@@ -65,7 +42,6 @@ public static class AnthropicServiceCollectionExtensions
             options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(circuitBreakSeconds);
         });
 
-        // Register AnthropicClient as singleton (thread-safe, stateless service)
         services.AddSingleton<IAnthropicClient>(provider =>
         {
             var factory = provider.GetRequiredService<IHttpClientFactory>();

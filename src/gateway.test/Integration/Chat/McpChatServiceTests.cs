@@ -18,7 +18,7 @@ public class McpChatServiceTests
         var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
         var catalog = new Mock<ISecureTableCatalogRepository>(MockBehavior.Strict);
         catalog.Setup(repository => repository.GetTablesAsync()).ReturnsAsync(Catalog);
-        catalog.Setup(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2))
+        catalog.Setup(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2, null, null))
             .ReturnsAsync("[{\"ProductID\":1,\"Name\":\"Road Bike\"}]");
         anthropic.SetupSequence(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("{\"tool\":\"read_database_table\",\"schema\":\"SalesLT\",\"table\":\"Product\",\"limit\":2}")
@@ -29,7 +29,7 @@ public class McpChatServiceTests
 
         result.Tool.Should().Be("read_database_table");
         result.Message.Should().Contain("Road Bike");
-        catalog.Verify(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2), Times.Once);
+        catalog.Verify(repository => repository.GetTableRowsAsync("SalesLT", "Product", 2, null, null), Times.Once);
         anthropic.Verify(client => client.SendMessageAsync(
             It.IsAny<string>(),
             It.Is<string>(input => input.Contains("MCP result: [{\"ProductID\":1,\"Name\":\"Road Bike\"}]")),
@@ -50,6 +50,6 @@ public class McpChatServiceTests
 
         await action.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*outside the safe MCP catalog*");
-        catalog.Verify(repository => repository.GetTableRowsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>()), Times.Never);
+        catalog.Verify(repository => repository.GetTableRowsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), null, null), Times.Never);
     }
 }

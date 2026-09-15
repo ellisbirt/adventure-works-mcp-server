@@ -23,6 +23,7 @@ jobs:
   deploy:
     name: Deploy selected gateway image and frontend
     runs-on: ubuntu-latest
+    environment: production
     steps:
       - name: Validate image tag
         env:

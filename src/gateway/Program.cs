@@ -1,5 +1,5 @@
-// src/gateway/Program.cs
 using System.Text.Json;
+using System.Collections.Concurrent;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
@@ -27,6 +27,8 @@ if (authenticationRequired && !authenticationEnabled)
     throw new InvalidOperationException("Authentication:Authority and Authentication:Audience are required when authentication is enabled.");
 
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 32 * 1024);
+const int maxMcpBatchRequests = 20;
+var mcpSessions = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
 
 builder.Services.AddApplicationInsightsTelemetry();
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
@@ -85,7 +87,6 @@ builder.Host.UseSerilog((context, services, loggerConfiguration) =>
             TelemetryConverter.Traces);
 });
 
-// Connect your database connection strings directly to your live Azure SQL or local fallback container
 builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("AdventureWorksConnection"))
         .AddInterceptors(new CorrelationCommandInterceptor()));
@@ -179,123 +180,195 @@ string GetRateLimitPartitionKey(HttpContext context) =>
 
 void MapMcpEndpoints(IEndpointRouteBuilder routes)
 {
-    routes.MapGet("/mcp/tools", (ILogger<Program> logger) =>
-    {
-        GatewayLogMessages.ToolsRequested(logger);
-
-        var toolsList = new List<McpToolDefinition>
-        {
-            new(
-                Name: "get_customer_history",
-                Description: "Safely reads strongly-typed historical relational summaries for a specific customer from the database schemas.",
-                InputSchema: new McpInputSchema(
-                    Properties: new Dictionary<string, McpPropertyDefinition>
-                    {
-                        { "customerId", new McpPropertyDefinition("integer", "The unique identity key integer of the customer entity.") }
-                    },
-                    Required: new List<string> { "customerId" }
-                )
-            ),
-            new(
-                Name: "list_database_tables",
-                Description: "Lists every database table and the non-sensitive columns available to the model.",
-                InputSchema: new McpInputSchema()
-            ),
-            new(
-                Name: "read_database_table",
-                Description: "Reads up to 100 rows from an available database table, excluding personal information.",
-                InputSchema: new McpInputSchema(
-                    Properties: new Dictionary<string, McpPropertyDefinition>
-                    {
-                        { "schema", new McpPropertyDefinition("string", "Schema returned by list_database_tables.") },
-                        { "table", new McpPropertyDefinition("string", "Table name returned by list_database_tables.") },
-                        { "limit", new McpPropertyDefinition("integer", "Optional number of rows to return, from 1 through 100.") }
-                    },
-                    Required: new List<string> { "schema", "table" }
-                )
-            )
-        };
-
-        return Results.Ok(new McpListToolsResponse(toolsList));
-    }).RequireRateLimiting("mcp");
-
-    routes.MapPost("/mcp/tools/call", async (
-        McpCallToolRequest request,
+    routes.MapPost("/mcp", async (
+        HttpRequest httpRequest,
         ISecureCustomerRepository repo,
         ISecureTableCatalogRepository tableCatalog,
-        ILogger<Program> logger) =>
+        ILogger<Program> logger,
+        CancellationToken cancellationToken) =>
     {
-        if (request.Arguments is null)
+        var sessionId = httpRequest.Headers["Mcp-Session-Id"].FirstOrDefault();
+        JsonDocument document;
+        try
         {
-            GatewayLogMessages.UnknownTool(logger, request.Name);
-
-            return Results.BadRequest(new McpCallToolResponse(
-                new List<McpContentText> { new("text", "Error: The requested tool is not mapped to this gateway server profile.") },
-                IsError: true
-            ));
+            document = await JsonDocument.ParseAsync(httpRequest.Body, cancellationToken: cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return Results.Json(new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32700, "Parse error.")), statusCode: StatusCodes.Status400BadRequest);
         }
 
-        if (request.Name == "list_database_tables")
+        using (document)
         {
-            var tables = await tableCatalog.GetTablesAsync();
-            return Results.Ok(new McpCallToolResponse(
-                new List<McpContentText> { new("text", System.Text.Json.JsonSerializer.Serialize(tables)) }
-            ));
-        }
-
-        if (request.Name == "read_database_table")
-        {
-            if (!request.Arguments.TryGetValue("schema", out var rawSchema) ||
-                !request.Arguments.TryGetValue("table", out var rawTable) ||
-                string.IsNullOrWhiteSpace(rawSchema?.ToString()) || string.IsNullOrWhiteSpace(rawTable?.ToString()))
+            if (document.RootElement.ValueKind == JsonValueKind.Array)
             {
-                return Results.BadRequest(new McpCallToolResponse(
-                    new List<McpContentText> { new("text", "Error: Missing required arguments: schema and table.") },
-                    IsError: true
-                ));
+                if (document.RootElement.GetArrayLength() == 0)
+                    return Results.Json(new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, "Invalid Request.")), statusCode: StatusCodes.Status400BadRequest);
+                if (document.RootElement.GetArrayLength() > maxMcpBatchRequests)
+                    return Results.Json(new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, $"Batch requests may contain at most {maxMcpBatchRequests} items.")), statusCode: StatusCodes.Status400BadRequest);
+
+                if (document.RootElement.EnumerateArray().Any(IsInitializeRequest))
+                {
+                    sessionId = CreateMcpSession(mcpSessions);
+                    httpRequest.HttpContext.Response.Headers["Mcp-Session-Id"] = sessionId;
+                }
+
+                var responses = new List<McpJsonRpcResponse>();
+                foreach (var item in document.RootElement.EnumerateArray())
+                {
+                    var response = await ProcessMcpRequestAsync(item, sessionId, mcpSessions, repo, tableCatalog, logger, cancellationToken);
+                    if (response is not null) responses.Add(response);
+                }
+
+                return responses.Count == 0 ? Results.NoContent() : Results.Json(responses);
             }
 
-            var limit = 20;
-            if (request.Arguments.TryGetValue("limit", out var rawLimit) &&
-                (!int.TryParse(rawLimit?.ToString(), out limit) || limit is < 1 or > 100))
+            if (IsInitializeRequest(document.RootElement))
             {
-                return Results.BadRequest(new McpCallToolResponse(
-                    new List<McpContentText> { new("text", "Error: limit must be an integer from 1 through 100.") },
-                    IsError: true
-                ));
+                sessionId = CreateMcpSession(mcpSessions);
+                httpRequest.HttpContext.Response.Headers["Mcp-Session-Id"] = sessionId;
             }
 
-            var rows = await tableCatalog.GetTableRowsAsync(rawSchema!.ToString()!, rawTable!.ToString()!, limit);
-            return Results.Ok(new McpCallToolResponse(new List<McpContentText> { new("text", rows) }));
+            var singleResponse = await ProcessMcpRequestAsync(document.RootElement, sessionId, mcpSessions, repo, tableCatalog, logger, cancellationToken);
+            return singleResponse is null ? Results.NoContent() : Results.Json(singleResponse);
         }
-
-        if (request.Name != "get_customer_history")
-        {
-            GatewayLogMessages.UnknownTool(logger, request.Name);
-            return Results.BadRequest(new McpCallToolResponse(
-                new List<McpContentText> { new("text", "Error: The requested tool is not mapped to this gateway server profile.") },
-                IsError: true
-            ));
-        }
-
-        if (!request.Arguments.TryGetValue("customerId", out var rawId) ||
-            !int.TryParse(rawId?.ToString(), out int customerId) || customerId <= 0)
-        {
-            GatewayLogMessages.InvalidCustomerId(logger);
-
-            return Results.BadRequest(new McpCallToolResponse(
-                new List<McpContentText> { new("text", "Error: Missing or malformed required argument: customerId.") },
-                IsError: true
-            ));
-        }
-
-        GatewayLogMessages.CustomerHistoryRequested(logger, customerId);
-        var dataContext = await repo.GetCustomerContextAsync(customerId, maskSensitiveData: true);
-
-        return Results.Ok(new McpCallToolResponse(
-            new List<McpContentText> { new("text", dataContext) }
-        ));
     }).RequireRateLimiting("mcp");
+}
+
+static bool IsInitializeRequest(JsonElement element) =>
+    element.ValueKind == JsonValueKind.Object &&
+    element.TryGetProperty("method", out var method) &&
+    method.ValueKind == JsonValueKind.String &&
+    method.GetString() == "initialize";
+
+static string CreateMcpSession(ConcurrentDictionary<string, byte> sessions)
+{
+    var sessionId = Guid.NewGuid().ToString("N");
+    sessions.TryAdd(sessionId, 0);
+    return sessionId;
+}
+
+static JsonElement JsonNullId() => JsonDocument.Parse("null").RootElement.Clone();
+
+async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
+    JsonElement element,
+    string? sessionId,
+    ConcurrentDictionary<string, byte> sessions,
+    ISecureCustomerRepository repo,
+    ISecureTableCatalogRepository tableCatalog,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken)
+{
+    McpJsonRpcRequest? request;
+    try
+    {
+        request = element.Deserialize<McpJsonRpcRequest>();
+    }
+    catch (JsonException)
+    {
+        return new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, "Invalid Request."));
+    }
+
+    if (request is null)
+        return new McpJsonRpcResponse("2.0", JsonNullId(), Error: new McpJsonRpcError(-32600, "Invalid Request."));
+
+    if (request.JsonRpc != "2.0" || string.IsNullOrWhiteSpace(request.Method) ||
+        (request.Id.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null) &&
+         request.Id.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)))
+        return new McpJsonRpcResponse("2.0", request.Id.ValueKind == JsonValueKind.Undefined ? JsonNullId() : request.Id, Error: new McpJsonRpcError(-32600, "Invalid Request."));
+
+    var id = request.Id.ValueKind == JsonValueKind.Undefined ? JsonNullId() : request.Id.Clone();
+    McpJsonRpcResponse? Response(object result) => request.IsNotification ? null : new McpJsonRpcResponse("2.0", id, Result: result);
+    McpJsonRpcResponse? Error(int code, string message) => request.IsNotification ? null : new McpJsonRpcResponse("2.0", id, Error: new McpJsonRpcError(code, message));
+
+    if (request.Method != "initialize" && (string.IsNullOrWhiteSpace(sessionId) || !sessions.ContainsKey(sessionId)))
+        return Error(-32000, "MCP session is not initialized.");
+
+    if (request.Method == "notifications/initialized") return null;
+
+    if (request.Method == "initialize")
+    {
+        var protocolVersion = "2025-06-18";
+        if (request.Params.ValueKind == JsonValueKind.Object && request.Params.TryGetProperty("protocolVersion", out var requestedVersion) &&
+            requestedVersion.ValueKind == JsonValueKind.String && requestedVersion.GetString() is "2024-11-05" or "2025-06-18")
+            protocolVersion = requestedVersion.GetString()!;
+
+        return Response(new
+        {
+            protocolVersion,
+            capabilities = new { tools = new { } },
+            serverInfo = new { name = "enterprise-ai-gateway", version = "1.0.0" }
+        });
+    }
+
+    if (request.Method == "tools/list")
+    {
+        GatewayLogMessages.ToolsRequested(logger);
+        return Response(new { tools = BuildMcpTools() });
+    }
+
+    if (request.Method != "tools/call") return Error(-32601, "Method not found.");
+    if (request.Params.ValueKind != JsonValueKind.Object || !request.Params.TryGetProperty("name", out var nameElement) ||
+        nameElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(nameElement.GetString()))
+        return Error(-32602, "Invalid params.");
+
+    var arguments = new Dictionary<string, object>();
+    if (request.Params.TryGetProperty("arguments", out var argumentsElement))
+    {
+        if (argumentsElement.ValueKind != JsonValueKind.Object)
+            return Error(-32602, "Invalid params.");
+        foreach (var property in argumentsElement.EnumerateObject()) arguments[property.Name] = property.Value.Clone();
+    }
+
+    var toolResponse = await ExecuteMcpToolAsync(nameElement.GetString()!, arguments, repo, tableCatalog, logger);
+    return Response(toolResponse);
+}
+
+List<McpToolDefinition> BuildMcpTools() =>
+[
+    new("get_customer_history", "Safely reads strongly-typed historical relational summaries for a specific customer from the database schemas.", new McpInputSchema(Properties: new Dictionary<string, McpPropertyDefinition> { ["customerId"] = new("integer", "The unique identity key integer of the customer entity.") }, Required: ["customerId"])),
+    new("list_database_tables", "Lists every database table and its useful columns available to the model; personal fields are redacted.", new McpInputSchema()),
+    new("read_database_table", "Reads up to 100 rows from an available database table; personal fields are redacted and marked [REDACTED].", new McpInputSchema(Properties: new Dictionary<string, McpPropertyDefinition> { ["schema"] = new("string", "Schema returned by list_database_tables."), ["table"] = new("string", "Table name returned by list_database_tables."), ["limit"] = new("integer", "Optional number of rows to return, from 1 through 100.") }, Required: ["schema", "table"]))
+];
+
+async Task<McpCallToolResponse> ExecuteMcpToolAsync(
+    string name,
+    Dictionary<string, object> arguments,
+    ISecureCustomerRepository repo,
+    ISecureTableCatalogRepository tableCatalog,
+    ILogger<Program> logger)
+{
+    if (name == "list_database_tables")
+        return new([new("text", JsonSerializer.Serialize(await tableCatalog.GetTablesAsync()))]);
+
+    if (name == "read_database_table")
+    {
+        if (!arguments.TryGetValue("schema", out var rawSchema) || !arguments.TryGetValue("table", out var rawTable) ||
+            string.IsNullOrWhiteSpace(rawSchema.ToString()) || string.IsNullOrWhiteSpace(rawTable.ToString()))
+            return new([new("text", "Error: Missing required arguments: schema and table.")], true);
+
+        var limit = 20;
+        if (arguments.TryGetValue("limit", out var rawLimit) && (!int.TryParse(rawLimit.ToString(), out limit) || limit is < 1 or > 100))
+            return new([new("text", "Error: limit must be an integer from 1 through 100.")], true);
+
+        var rows = await tableCatalog.GetTableRowsAsync(rawSchema.ToString()!, rawTable.ToString()!, limit);
+        return new([new("text", rows)]);
+    }
+
+    if (name != "get_customer_history")
+    {
+        GatewayLogMessages.UnknownTool(logger, name);
+        return new([new("text", "Error: The requested tool is not mapped to this gateway server profile.")], true);
+    }
+
+    if (!arguments.TryGetValue("customerId", out var rawId) || !int.TryParse(rawId.ToString(), out var customerId) || customerId <= 0)
+    {
+        GatewayLogMessages.InvalidCustomerId(logger);
+        return new([new("text", "Error: Missing or malformed required argument: customerId.")], true);
+    }
+
+    GatewayLogMessages.CustomerHistoryRequested(logger, customerId);
+    return new([new("text", await repo.GetCustomerContextAsync(customerId))]);
 }
 
 void MapChatEndpoints(IEndpointRouteBuilder routes)
@@ -335,15 +408,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
     }).RequireRateLimiting("chat");
 }
 
-// Versioned API is canonical; legacy paths remain as compatibility aliases.
 var api = app.MapGroup("/api/v1");
 if (authenticationRequired) api.RequireAuthorization("gateway-api");
 MapMcpEndpoints(api);
 MapChatEndpoints(api);
-var legacyApi = app.MapGroup("");
-if (authenticationRequired) legacyApi.RequireAuthorization("gateway-api");
-MapMcpEndpoints(legacyApi);
-MapChatEndpoints(legacyApi);
 
 app.Run();
 
