@@ -361,7 +361,11 @@ static async Task<int> RunContainerHealthcheckAsync()
         using var response = await client.GetAsync(healthUrl, cancellation.Token);
         return response.IsSuccessStatusCode ? 0 : 1;
     }
-    catch
+    catch (HttpRequestException)
+    {
+        return 1;
+    }
+    catch (TaskCanceledException)
     {
         return 1;
     }
