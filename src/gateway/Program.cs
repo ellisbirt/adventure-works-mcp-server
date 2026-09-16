@@ -15,6 +15,11 @@ using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 using Serilog;
 
+if (args.Contains("--container-healthcheck", StringComparer.Ordinal))
+{
+    return await RunContainerHealthcheckAsync();
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var authenticationAuthority = builder.Configuration["Authentication:Authority"];
 var authenticationAudience = builder.Configuration["Authentication:Audience"];
@@ -350,3 +355,21 @@ internal sealed record HealthResponse(
     bool? Database,
     bool? Anthropic,
     IReadOnlyList<string> Details);
+
+static async Task<int> RunContainerHealthcheckAsync()
+{
+    var healthUrl = Environment.GetEnvironmentVariable("CONTAINER_HEALTHCHECK_URL")
+        ?? "http://127.0.0.1:8080/health/ready";
+
+    try
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        using var response = await client.GetAsync(healthUrl, cancellation.Token);
+        return response.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch
+    {
+        return 1;
+    }
+}
