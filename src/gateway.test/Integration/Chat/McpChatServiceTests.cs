@@ -13,6 +13,13 @@ public class McpChatServiceTests
 {
     private static readonly IReadOnlyList<SafeTableDefinition> Catalog =
     [new("SalesLT", "Product", new[] { "ProductID", "Name", "ListPrice" })];
+    private static readonly IReadOnlyList<McpToolDefinition> ToolDefinitions =
+    [
+        new("list_database_tables", "list", new McpInputSchema()),
+        new("read_database_table", "read", new McpInputSchema()),
+        new("get_top_selling_products_summary", "summary", new McpInputSchema()),
+        new("get_highest_revenue_products_summary", "summary", new McpInputSchema())
+    ];
 
     private static bool IsReadRequest(IReadOnlyDictionary<string, object> arguments, string schema, string table, int limit) =>
         arguments.TryGetValue("schema", out var s) && s.Equals(schema) &&
@@ -24,6 +31,7 @@ public class McpChatServiceTests
     {
         var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
         var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("read_database_table", It.Is<IReadOnlyDictionary<string, object>>(args => IsReadRequest(args, "SalesLT", "Product", 2)), It.IsAny<CancellationToken>()))
@@ -49,6 +57,7 @@ public class McpChatServiceTests
     {
         var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
         var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
         anthropic.Setup(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -67,6 +76,7 @@ public class McpChatServiceTests
     {
         var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
         var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("read_database_table", It.Is<IReadOnlyDictionary<string, object>>(args => IsReadRequest(args, "SalesLT", "Product", 2)), It.IsAny<CancellationToken>()))
@@ -80,5 +90,27 @@ public class McpChatServiceTests
 
         result.Tool.Should().Be("read_database_table");
         toolExecutor.Verify(executor => executor.ExecuteToolAsync("read_database_table", It.Is<IReadOnlyDictionary<string, object>>(args => IsReadRequest(args, "SalesLT", "Product", 2)), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AskAsync_WithSalesSummaryRequest_ExecutesSummaryToolAndReturnsAnswer()
+    {
+        var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
+        var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: """{"metric":"top_selling_products_by_quantity","items":[{"productId":1}]}""")]));
+        anthropic.SetupSequence(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"tool":"get_top_selling_products_summary","arguments":{"top":5,"startDate":"2024-01-01","endDate":"2024-12-31"}}""")
+            .ReturnsAsync("Road Bike is the top seller.");
+        var service = new McpChatService(anthropic.Object, toolExecutor.Object);
+
+        var result = await service.AskAsync("What are the top selling products in 2024?");
+
+        result.Tool.Should().Be("get_top_selling_products_summary");
+        result.Message.Should().Contain("top seller");
+        toolExecutor.Verify(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

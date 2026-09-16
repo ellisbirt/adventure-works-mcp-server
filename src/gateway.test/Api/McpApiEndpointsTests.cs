@@ -16,6 +16,7 @@ namespace EnterpriseAiGateway.Tests.Api;
 public class McpApiEndpointsTests : IAsyncLifetime
 {
     private readonly WebApplicationFactory<Program> _factory;
+    private readonly Mock<ISecureSalesSummaryRepository> _salesSummaryRepository = new(MockBehavior.Strict);
     private readonly Mock<ISecureTableCatalogRepository> _tableCatalog = new(MockBehavior.Strict);
     private HttpClient _client = null!;
 
@@ -29,14 +30,21 @@ public class McpApiEndpointsTests : IAsyncLifetime
             if (repositoryDescriptor is not null) services.Remove(repositoryDescriptor);
             var tableCatalogDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ISecureTableCatalogRepository));
             if (tableCatalogDescriptor is not null) services.Remove(tableCatalogDescriptor);
+            var salesSummaryDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ISecureSalesSummaryRepository));
+            if (salesSummaryDescriptor is not null) services.Remove(salesSummaryDescriptor);
 
             services.AddDbContext<AdventureWorksDbContext>(options => options.UseInMemoryDatabase("McpJsonRpcTestDb"));
             services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
             services.AddScoped(_ => _tableCatalog.Object);
+            services.AddScoped(_ => _salesSummaryRepository.Object);
         }));
 
         _tableCatalog.Setup(repository => repository.GetTablesAsync())
             .ReturnsAsync([new SafeTableDefinition("SalesLT", "Product", ["ProductID", "Name", "ListPrice"])]);
+        _salesSummaryRepository.Setup(repository => repository.GetTopSellingProductsSummaryAsync(It.IsAny<EnterpriseAiGateway.Core.DTOs.SalesSummaryFilter>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"metric":"top_selling_products_by_quantity","items":[]}""");
+        _salesSummaryRepository.Setup(repository => repository.GetHighestRevenueProductsSummaryAsync(It.IsAny<EnterpriseAiGateway.Core.DTOs.SalesSummaryFilter>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"metric":"highest_revenue_products","items":[]}""");
     }
 
     public async Task InitializeAsync()
@@ -72,7 +80,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.GetProperty("id").GetString().Should().Be("tools");
-        body.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(3);
+        body.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(5);
         body.GetProperty("result").GetProperty("tools")[0].GetProperty("inputSchema").GetProperty("required").GetArrayLength().Should().Be(1);
     }
 
@@ -96,6 +104,32 @@ public class McpApiEndpointsTests : IAsyncLifetime
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
         body.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString().Should().Contain("customerId");
+    }
+
+    [Fact]
+    public async Task CallTool_ReturnsSalesSummaryResult()
+    {
+        var response = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 31,
+            method = "tools/call",
+            @params = new
+            {
+                name = "get_top_selling_products_summary",
+                arguments = new
+                {
+                    top = 5,
+                    startDate = "2024-01-01",
+                    endDate = "2024-12-31"
+                }
+            }
+        });
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeFalse();
+        body.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString().Should().Contain("top_selling_products_by_quantity");
     }
 
     [Fact]

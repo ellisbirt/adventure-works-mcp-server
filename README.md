@@ -147,7 +147,33 @@ Example tool listing request:
 {"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
 ```
 
-`tools/list` advertises `get_customer_history`, `list_database_tables`, and `read_database_table`. The catalog tool returns every user table with its useful columns. The read tool requires catalog-provided schema and table names and permits 1-100 rows. Credential and internal surrogate-key columns (e.g. password hashes, row GUIDs) are never returned; personal, contact, and location fields are returned but redacted and marked with a `[REDACTED]` value so their presence in the schema stays visible without leaking the underlying data.
+`tools/list` advertises `get_customer_history`, `list_database_tables`, `read_database_table`, `get_top_selling_products_summary`, and `get_highest_revenue_products_summary`.
+
+- The catalog tool returns every user table with its useful columns.
+- The read tool requires catalog-provided schema and table names and permits 1-100 rows.
+- `get_top_selling_products_summary` ranks products by total quantity sold.
+- `get_highest_revenue_products_summary` ranks products by total revenue from `SalesLT.SalesOrderDetail.LineTotal` (excluding order-level tax and freight).
+
+Both summary tools accept optional filters: `startDate`/`endDate` (`YYYY-MM-DD`, inclusive UTC calendar boundaries), `productIds` (integer array), `productCategoryIds` (integer array), and `top` (1-100, default 10). Credential and internal surrogate-key columns (e.g. password hashes, row GUIDs) are never returned; personal, contact, and location fields are returned but redacted and marked with a `[REDACTED]` value so their presence in the schema stays visible without leaking the underlying data.
+
+Example summary request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "get_highest_revenue_products_summary",
+    "arguments": {
+      "top": 5,
+      "startDate": "2024-01-01",
+      "endDate": "2024-12-31",
+      "productCategoryIds": [1, 2]
+    }
+  }
+}
+```
 
 `POST /api/v1/chat` accepts `{ "message": "..." }`. When `Anthropic:ApiKey` is configured, the gateway asks Claude to select from its MCP catalog, validates that selection against the safe catalog, executes the operation, and asks Claude to answer using only that MCP result. The browser never receives the Anthropic key or direct database access. CORS is configured from `Cors:AllowedOrigins`; Terraform injects the Blob Static Website origin into the deployed gateway.
 

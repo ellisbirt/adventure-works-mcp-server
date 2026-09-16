@@ -15,4 +15,10 @@ internal static partial class GatewayLogMessages
 
     [LoggerMessage(LogLevel.Information, "MCP customer history requested for customer {CustomerId}")]
     public static partial void CustomerHistoryRequested(ILogger logger, int customerId);
+
+    [LoggerMessage(LogLevel.Information, "MCP sales summary tool {ToolName} requested with top={Top} hasDateRange={HasDateRange} productFilters={ProductFilters} categoryFilters={CategoryFilters}")]
+    public static partial void SalesSummaryToolRequested(ILogger logger, string toolName, int top, bool hasDateRange, int productFilters, int categoryFilters);
+
+    [LoggerMessage(LogLevel.Warning, "MCP sales summary tool {ToolName} request rejected: {Reason}")]
+    public static partial void InvalidSalesSummaryArguments(ILogger logger, string toolName, string reason);
 }

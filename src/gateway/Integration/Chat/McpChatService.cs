@@ -30,13 +30,19 @@ public sealed class McpChatService : IMcpChatService
         if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("A chat message is required.", nameof(message));
 
         var tables = await GetSafeCatalogAsync(cancellationToken);
+        var toolNames = _toolExecutor.GetToolDefinitions().Select(definition => definition.Name).ToHashSet(StringComparer.Ordinal);
         var routingPrompt = "You are an MCP tool router. Return JSON only, without markdown. " +
-            "Available tools: list_database_tables, read_database_table. " +
+            "Available tools: list_database_tables, read_database_table, get_top_selling_products_summary, get_highest_revenue_products_summary. " +
             "For list_database_tables return {\"tool\":\"list_database_tables\"}. " +
             "For read_database_table return {\"tool\":\"read_database_table\",\"schema\":\"...\",\"table\":\"...\",\"limit\":1-100}. " +
+            "For get_top_selling_products_summary return {\"tool\":\"get_top_selling_products_summary\",\"arguments\":{\"top\":1-100,\"startDate\":\"YYYY-MM-DD\",\"endDate\":\"YYYY-MM-DD\",\"productIds\":[1,2],\"productCategoryIds\":[1]}} with optional arguments. " +
+            "For get_highest_revenue_products_summary return {\"tool\":\"get_highest_revenue_products_summary\",\"arguments\":{\"top\":1-100,\"startDate\":\"YYYY-MM-DD\",\"endDate\":\"YYYY-MM-DD\",\"productIds\":[1,2],\"productCategoryIds\":[1]}} with optional arguments. " +
             $"Only choose a schema, table, and columns from this safe MCP catalog: {JsonSerializer.Serialize(tables)}";
         var route = await _anthropicClient.SendMessageAsync(routingPrompt, message, cancellationToken);
         var selection = ParseSelection(route);
+        if (!toolNames.Contains(selection.Tool))
+            throw new InvalidOperationException("The model selected an unsupported MCP tool.");
+
         var toolResult = await ExecuteToolAsync(selection, tables, cancellationToken);
         var answer = await _anthropicClient.SendMessageAsync(
             SystemPrompt,
@@ -59,33 +65,82 @@ public sealed class McpChatService : IMcpChatService
     {
         if (selection.Tool == "list_database_tables") return JsonSerializer.Serialize(tables);
 
-        if (selection.Tool != "read_database_table" || string.IsNullOrWhiteSpace(selection.Schema) || string.IsNullOrWhiteSpace(selection.Table))
+        if (selection.Tool == "read_database_table")
+        {
+            var schema = ReadStringArgument(selection.Arguments, "schema", selection.Schema);
+            var table = ReadStringArgument(selection.Arguments, "table", selection.Table);
+            var limit = ReadIntegerArgument(selection.Arguments, "limit") ?? selection.Limit ?? 20;
+            if (string.IsNullOrWhiteSpace(schema) || string.IsNullOrWhiteSpace(table))
+                throw new InvalidOperationException("The model selected an invalid table request.");
+
+            var isKnownTable = tables.Any(item =>
+                item.Schema.Equals(schema, StringComparison.OrdinalIgnoreCase) &&
+                item.Name.Equals(table, StringComparison.OrdinalIgnoreCase));
+            if (!isKnownTable) throw new InvalidOperationException("The model selected a table outside the safe MCP catalog.");
+
+            var arguments = new Dictionary<string, object>
+            {
+                ["schema"] = schema,
+                ["table"] = table,
+                ["limit"] = Math.Clamp(limit, 1, 100)
+            };
+            var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
+            if (response.IsError) throw new InvalidOperationException("The database assistant could not execute read_database_table.");
+            return response.Content.FirstOrDefault()?.Text ?? string.Empty;
+        }
+
+        if (selection.Tool is not ("get_top_selling_products_summary" or "get_highest_revenue_products_summary"))
             throw new InvalidOperationException("The model selected an unsupported MCP tool.");
 
-        var isKnownTable = tables.Any(item =>
-            item.Schema.Equals(selection.Schema, StringComparison.OrdinalIgnoreCase) &&
-            item.Name.Equals(selection.Table, StringComparison.OrdinalIgnoreCase));
-        if (!isKnownTable) throw new InvalidOperationException("The model selected a table outside the safe MCP catalog.");
+        var summaryResponse = await _toolExecutor.ExecuteToolAsync(selection.Tool, selection.Arguments, cancellationToken);
+        if (summaryResponse.IsError) throw new InvalidOperationException("The database assistant could not execute the summary request.");
+        return summaryResponse.Content.FirstOrDefault()?.Text ?? string.Empty;
+    }
 
-        var arguments = new Dictionary<string, object>
+    private static string? ReadStringArgument(IReadOnlyDictionary<string, object> arguments, string key, string? fallback = null)
+    {
+        if (!arguments.TryGetValue(key, out var value)) return fallback;
+        if (value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.String) return jsonElement.GetString();
+        return value.ToString();
+    }
+
+    private static int? ReadIntegerArgument(IReadOnlyDictionary<string, object> arguments, string key)
+    {
+        if (!arguments.TryGetValue(key, out var value)) return null;
+        if (value is JsonElement jsonElement)
         {
-            ["schema"] = selection.Schema,
-            ["table"] = selection.Table,
-            ["limit"] = Math.Clamp(selection.Limit ?? 20, 1, 100)
-        };
-        var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
-        return response.Content.FirstOrDefault()?.Text ?? string.Empty;
+            if (jsonElement.ValueKind == JsonValueKind.Number && jsonElement.TryGetInt32(out var integerValue)) return integerValue;
+            if (jsonElement.ValueKind == JsonValueKind.String && int.TryParse(jsonElement.GetString(), out integerValue)) return integerValue;
+            return null;
+        }
+
+        return int.TryParse(value.ToString(), out var parsed) ? parsed : null;
     }
 
     private static McpToolSelection ParseSelection(string route)
     {
         using var document = JsonDocument.Parse(StripMarkdownCodeFence(route));
         var root = document.RootElement;
+        var arguments = new Dictionary<string, object>(StringComparer.Ordinal);
+        if (root.TryGetProperty("arguments", out var argumentsElement) && argumentsElement.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in argumentsElement.EnumerateObject())
+                arguments[property.Name] = property.Value.Clone();
+        }
+
+        var schema = root.TryGetProperty("schema", out var schemaElement) ? schemaElement.GetString() : null;
+        var table = root.TryGetProperty("table", out var tableElement) ? tableElement.GetString() : null;
+        var limit = root.TryGetProperty("limit", out var limitElement) && limitElement.TryGetInt32(out var value) ? value : null;
+        if (!string.IsNullOrWhiteSpace(schema) && !arguments.ContainsKey("schema")) arguments["schema"] = schema;
+        if (!string.IsNullOrWhiteSpace(table) && !arguments.ContainsKey("table")) arguments["table"] = table;
+        if (limit is not null && !arguments.ContainsKey("limit")) arguments["limit"] = limit.Value;
+
         return new McpToolSelection(
             root.GetProperty("tool").GetString() ?? string.Empty,
-            root.TryGetProperty("schema", out var schema) ? schema.GetString() : null,
-            root.TryGetProperty("table", out var table) ? table.GetString() : null,
-            root.TryGetProperty("limit", out var limit) && limit.TryGetInt32(out var value) ? value : null);
+            arguments,
+            schema,
+            table,
+            limit);
     }
 
     // Some models wrap JSON responses in a ```json fence despite being told not to; strip one if present.
@@ -102,5 +157,5 @@ public sealed class McpChatService : IMcpChatService
         return (closingFenceIndex >= 0 ? withoutOpeningFence[..closingFenceIndex] : withoutOpeningFence).Trim();
     }
 
-    private record McpToolSelection(string Tool, string? Schema, string? Table, int? Limit);
+    private record McpToolSelection(string Tool, IReadOnlyDictionary<string, object> Arguments, string? Schema, string? Table, int? Limit);
 }

@@ -91,6 +91,7 @@ builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
         .AddInterceptors(new CorrelationCommandInterceptor()));
 
 builder.Services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
+builder.Services.AddScoped<ISecureSalesSummaryRepository, SecureSalesSummaryRepository>();
 builder.Services.AddScoped<ISecureTableCatalogRepository, SecureTableCatalogRepository>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Anthropic:ApiKey"]))
