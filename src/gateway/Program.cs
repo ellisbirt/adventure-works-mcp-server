@@ -92,6 +92,7 @@ builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
 
 builder.Services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 builder.Services.AddScoped<ISecureTableCatalogRepository, SecureTableCatalogRepository>();
+builder.Services.AddScoped<ISecureSalesInsightsRepository, SecureSalesInsightsRepository>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Anthropic:ApiKey"]))
 {

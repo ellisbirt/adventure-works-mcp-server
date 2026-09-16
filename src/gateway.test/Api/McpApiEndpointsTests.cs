@@ -17,6 +17,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
 {
     private readonly WebApplicationFactory<Program> _factory;
     private readonly Mock<ISecureTableCatalogRepository> _tableCatalog = new(MockBehavior.Strict);
+    private readonly Mock<ISecureSalesInsightsRepository> _salesInsights = new(MockBehavior.Strict);
     private HttpClient _client = null!;
 
     public McpApiEndpointsTests()
@@ -29,10 +30,13 @@ public class McpApiEndpointsTests : IAsyncLifetime
             if (repositoryDescriptor is not null) services.Remove(repositoryDescriptor);
             var tableCatalogDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ISecureTableCatalogRepository));
             if (tableCatalogDescriptor is not null) services.Remove(tableCatalogDescriptor);
+            var salesInsightsDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(ISecureSalesInsightsRepository));
+            if (salesInsightsDescriptor is not null) services.Remove(salesInsightsDescriptor);
 
             services.AddDbContext<AdventureWorksDbContext>(options => options.UseInMemoryDatabase("McpJsonRpcTestDb"));
             services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
             services.AddScoped(_ => _tableCatalog.Object);
+            services.AddScoped(_ => _salesInsights.Object);
         }));
 
         _tableCatalog.Setup(repository => repository.GetTablesAsync())
@@ -72,7 +76,7 @@ public class McpApiEndpointsTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.GetProperty("id").GetString().Should().Be("tools");
-        body.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(3);
+        body.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(10);
         body.GetProperty("result").GetProperty("tools")[0].GetProperty("inputSchema").GetProperty("required").GetArrayLength().Should().Be(1);
     }
 
