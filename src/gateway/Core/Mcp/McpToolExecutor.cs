@@ -105,8 +105,8 @@ public sealed class McpToolExecutor : IMcpToolExecutor
             ["top"] = new("integer", "Optional number of rows to return, from 1 through 100. Defaults to 10."),
             ["startDate"] = new("string", "Optional inclusive start date in UTC calendar format YYYY-MM-DD."),
             ["endDate"] = new("string", "Optional inclusive end date in UTC calendar format YYYY-MM-DD."),
-            ["productIds"] = new("array", "Optional integer array of ProductID values to include."),
-            ["productCategoryIds"] = new("array", "Optional integer array of ProductCategoryID values to include.")
+            ["productIds"] = new("array", "Optional integer array of ProductID values to include.", new("integer", "ProductID filter value.")),
+            ["productCategoryIds"] = new("array", "Optional integer array of ProductCategoryID values to include.", new("integer", "ProductCategoryID filter value."))
         };
 
     private static bool TryBuildSalesSummaryFilter(IReadOnlyDictionary<string, object> arguments, out SalesSummaryFilter filter, out string error)

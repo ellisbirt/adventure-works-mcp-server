@@ -94,4 +94,20 @@ public class McpToolExecutorTests
         tools.Should().Contain("get_top_selling_products_summary");
         tools.Should().Contain("get_highest_revenue_products_summary");
     }
+
+    [Fact]
+    public void GetToolDefinitions_SalesSummaryFiltersDeclareIntegerArrayItems()
+    {
+        var customerRepository = new Mock<ISecureCustomerRepository>(MockBehavior.Strict);
+        var tableCatalog = new Mock<ISecureTableCatalogRepository>(MockBehavior.Strict);
+        var summaryRepository = new Mock<ISecureSalesSummaryRepository>(MockBehavior.Strict);
+        var executor = new McpToolExecutor(customerRepository.Object, summaryRepository.Object, tableCatalog.Object, NullLogger<McpToolExecutor>.Instance);
+
+        var tool = executor.GetToolDefinitions().Single(definition => definition.Name == "get_top_selling_products_summary");
+
+        tool.InputSchema.Properties!["productIds"].Type.Should().Be("array");
+        tool.InputSchema.Properties["productIds"].Items!.Type.Should().Be("integer");
+        tool.InputSchema.Properties["productCategoryIds"].Type.Should().Be("array");
+        tool.InputSchema.Properties["productCategoryIds"].Items!.Type.Should().Be("integer");
+    }
 }

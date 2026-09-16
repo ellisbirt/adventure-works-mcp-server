@@ -25,7 +25,8 @@ public record McpInputSchema(
 
 public record McpPropertyDefinition(
     [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("description")] string Description
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("items"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] McpPropertyDefinition? Items = null
 );
 
 public record McpCallToolRequest(
