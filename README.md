@@ -1,6 +1,6 @@
 # Enterprise AI Gateway
 
-An end-to-end portfolio sample showing a React frontend, a .NET 8 JSON-RPC MCP gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
+An end-to-end portfolio sample showing a React frontend, a .NET 10 JSON-RPC MCP gateway, Azure SQL grounding, managed identity authentication, Key Vault secret references, Application Insights, GitHub Actions, GHCR, and low-cost Azure hosting.
 
 ## About This Project
 
@@ -13,7 +13,7 @@ This repository is a self-directed portfolio project, not client or employer wor
 ```mermaid
 flowchart LR
 	User[Browser] --> Frontend[Azure Blob Static Website<br/>React/Vite assets]
-	Frontend -->|HTTPS + CORS| Gateway[Azure Container Apps Consumption<br/>.NET 8 MCP gateway]
+	Frontend -->|HTTPS + CORS| Gateway[Azure Container Apps Consumption<br/>.NET 10 MCP gateway]
 	Gateway -->|Entra token via user-assigned identity| SQL[Azure SQL Database<br/>AdventureWorksLT]
 	Gateway -->|Key Vault reference| Vault[Azure Key Vault<br/>Anthropic API key]
 	Gateway --> Insights[Application Insights]
@@ -194,7 +194,7 @@ Install and authenticate:
 - Terraform 1.9+
 - Docker, for local image builds
 - GitHub CLI, optional but useful for repository variables
-- .NET 8 SDK
+- .NET 10 SDK
 - Node.js 24+
 
 Login to Azure and select the target subscription:

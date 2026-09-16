@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;

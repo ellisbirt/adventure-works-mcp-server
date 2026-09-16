@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Moq;
 using System.Net;
 using Microsoft.Extensions.Configuration;
