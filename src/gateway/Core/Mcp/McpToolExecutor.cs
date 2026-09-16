@@ -22,6 +22,7 @@ public sealed class McpToolExecutor : IMcpToolExecutor
 {
     private const int DefaultTop = 10;
     private const int MaxTop = 100;
+    private const int MaxSalesSummaryFilterCount = 2097;
     private readonly ISecureCustomerRepository _customerRepository;
     private readonly ISecureSalesSummaryRepository _salesSummaryRepository;
     private readonly ISecureTableCatalogRepository _tableCatalog;
@@ -140,6 +141,13 @@ public sealed class McpToolExecutor : IMcpToolExecutor
         if (productCategoryIds is not null && productCategoryIds.Any(id => id <= 0))
         {
             error = "productCategoryIds must contain only positive integers.";
+            return false;
+        }
+
+        var combinedFilterCount = (productIds?.Count ?? 0) + (productCategoryIds?.Count ?? 0);
+        if (combinedFilterCount > MaxSalesSummaryFilterCount)
+        {
+            error = $"productIds and productCategoryIds can contain at most {MaxSalesSummaryFilterCount} total values.";
             return false;
         }
 

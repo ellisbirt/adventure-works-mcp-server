@@ -64,6 +64,24 @@ public class McpToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteToolAsync_WithTooManySummaryFilterIds_ReturnsValidationError()
+    {
+        var customerRepository = new Mock<ISecureCustomerRepository>(MockBehavior.Strict);
+        var tableCatalog = new Mock<ISecureTableCatalogRepository>(MockBehavior.Strict);
+        var summaryRepository = new Mock<ISecureSalesSummaryRepository>(MockBehavior.Strict);
+        var executor = new McpToolExecutor(customerRepository.Object, summaryRepository.Object, tableCatalog.Object, NullLogger<McpToolExecutor>.Instance);
+
+        using var productIdsDocument = JsonDocument.Parse($"[{string.Join(",", Enumerable.Range(1, 2098))}]");
+        var result = await executor.ExecuteToolAsync("get_top_selling_products_summary", new Dictionary<string, object>
+        {
+            ["productIds"] = productIdsDocument.RootElement.Clone()
+        });
+
+        result.IsError.Should().BeTrue();
+        result.Content[0].Text.Should().Contain("productIds and productCategoryIds can contain at most 2097 total values");
+    }
+
+    [Fact]
     public void GetToolDefinitions_ContainsSalesSummaryTools()
     {
         var customerRepository = new Mock<ISecureCustomerRepository>(MockBehavior.Strict);
