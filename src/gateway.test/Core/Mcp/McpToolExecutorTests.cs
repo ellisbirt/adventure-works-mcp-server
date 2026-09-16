@@ -1,4 +1,6 @@
+using System.Text.Json;
 using AwesomeAssertions;
+using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Core.Mcp;
 using EnterpriseAiGateway.Data.Repositories;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,15 +18,31 @@ public class McpToolExecutorTests
         var tableCatalog = new Mock<ISecureTableCatalogRepository>(MockBehavior.Strict);
         var summaryRepository = new Mock<ISecureSalesSummaryRepository>(MockBehavior.Strict);
         summaryRepository
-            .Setup(repository => repository.GetTopSellingProductsSummaryAsync(It.IsAny<EnterpriseAiGateway.Core.DTOs.SalesSummaryFilter>(), It.IsAny<CancellationToken>()))
+            .Setup(repository => repository.GetTopSellingProductsSummaryAsync(
+                It.Is<SalesSummaryFilter>(filter =>
+                    filter.Top == 5 &&
+                    filter.StartDate == new DateOnly(2024, 1, 1) &&
+                    filter.EndDate == new DateOnly(2024, 12, 31) &&
+                    filter.ProductIds!.SequenceEqual(new[] { 1, 2 }) &&
+                    filter.ProductCategoryIds!.SequenceEqual(new[] { 10 })),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync("""{"metric":"top_selling_products_by_quantity"}""");
         var executor = new McpToolExecutor(customerRepository.Object, summaryRepository.Object, tableCatalog.Object, NullLogger<McpToolExecutor>.Instance);
 
-        var result = await executor.ExecuteToolAsync("get_top_selling_products_summary", new Dictionary<string, object> { ["top"] = 5, ["startDate"] = "2024-01-01" });
+        using var productIdsDocument = JsonDocument.Parse("[1,2]");
+        using var categoryIdsDocument = JsonDocument.Parse("[10]");
+        var result = await executor.ExecuteToolAsync("get_top_selling_products_summary", new Dictionary<string, object>
+        {
+            ["top"] = 5,
+            ["startDate"] = "2024-01-01",
+            ["endDate"] = "2024-12-31",
+            ["productIds"] = productIdsDocument.RootElement.Clone(),
+            ["productCategoryIds"] = categoryIdsDocument.RootElement.Clone()
+        });
 
         result.IsError.Should().BeFalse();
         result.Content[0].Text.Should().Contain("top_selling_products_by_quantity");
-        summaryRepository.Verify(repository => repository.GetTopSellingProductsSummaryAsync(It.IsAny<EnterpriseAiGateway.Core.DTOs.SalesSummaryFilter>(), It.IsAny<CancellationToken>()), Times.Once);
+        summaryRepository.VerifyAll();
     }
 
     [Fact]

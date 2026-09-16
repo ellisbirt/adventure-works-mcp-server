@@ -113,4 +113,22 @@ public class McpChatServiceTests
         result.Message.Should().Contain("top seller");
         toolExecutor.Verify(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task AskAsync_WithToolOutsideDefinitionAllowList_RejectsSelection()
+    {
+        var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
+        var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
+        anthropic.Setup(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"tool":"totally_unknown_tool"}""");
+        var service = new McpChatService(anthropic.Object, toolExecutor.Object);
+
+        var action = () => service.AskAsync("use unknown tool");
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*unsupported MCP tool*");
+    }
 }
