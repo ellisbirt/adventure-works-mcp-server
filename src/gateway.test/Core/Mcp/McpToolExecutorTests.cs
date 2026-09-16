@@ -42,8 +42,8 @@ public class McpToolExecutorTests
                 options.Top == 5 &&
                 options.StartDate == new DateOnly(2024, 1, 1) &&
                 options.EndDate == new DateOnly(2024, 2, 1) &&
-                options.ProductIds!.SequenceEqual([1, 2]) &&
-                options.ProductCategoryIds!.SequenceEqual([3]))))
+                options.ProductIds!.SequenceEqual(new[] { 1, 2 }) &&
+                options.ProductCategoryIds!.SequenceEqual(new[] { 3 }))))
             .ReturnsAsync("[{\"ProductId\":1}]");
         var executor = CreateExecutor();
 
@@ -88,6 +88,21 @@ public class McpToolExecutorTests
 
         response.IsError.Should().BeTrue();
         response.Content[0].Text.Should().Contain("startDate");
+    }
+
+    [Fact]
+    public async Task ExecuteToolAsync_WithTooManyProductFilters_ReturnsError()
+    {
+        var executor = CreateExecutor();
+        var tooManyIds = Enumerable.Range(1, 201).ToArray();
+
+        var response = await executor.ExecuteToolAsync("get_sales_trend_summary", new Dictionary<string, object>
+        {
+            ["productIds"] = Json(JsonSerializer.Serialize(tooManyIds))
+        });
+
+        response.IsError.Should().BeTrue();
+        response.Content[0].Text.Should().Contain("cannot exceed 200");
     }
 
     private McpToolExecutor CreateExecutor() =>

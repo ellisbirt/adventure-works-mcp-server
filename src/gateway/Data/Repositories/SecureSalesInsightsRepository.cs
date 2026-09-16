@@ -232,7 +232,7 @@ public sealed class SecureSalesInsightsRepository : ISecureSalesInsightsReposito
                 Orders = group.Count(),
                 Revenue = group.Sum(item => item.TotalDue),
                 AverageShippingDays = decimal.Round((decimal)group.Where(item => item.ShipDate.HasValue).Select(item => (item.ShipDate!.Value - item.OrderDate).TotalDays).DefaultIfEmpty(0).Average(), 2),
-                LateShipmentRatePercent = decimal.Round(group.Count == 0 ? 0 : (decimal)group.Count(item => !item.ShipDate.HasValue || item.ShipDate > item.DueDate) / group.Count() * 100, 2)
+                LateShipmentRatePercent = decimal.Round(group.Count() == 0 ? 0 : (decimal)group.Count(item => !item.ShipDate.HasValue || item.ShipDate > item.DueDate) / group.Count() * 100, 2)
             })
             .OrderByDescending(item => item.Revenue)
             .Take(top);
@@ -333,12 +333,14 @@ public sealed class SecureSalesInsightsRepository : ISecureSalesInsightsReposito
             .ToList();
 
         var categoryNames = await _context.ProductCategories.AsNoTracking()
-            .ToDictionaryAsync(category => (int?)category.ProductCategoryId, category => category.Name);
+            .ToDictionaryAsync(category => category.ProductCategoryId, category => category.Name);
 
         var payload = forecast.Select(item => new
         {
             item.ProductCategoryId,
-            ProductCategoryName = categoryNames.GetValueOrDefault(item.ProductCategoryId) ?? "Uncategorized",
+            ProductCategoryName = item.ProductCategoryId.HasValue && categoryNames.TryGetValue(item.ProductCategoryId.Value, out var categoryName)
+                ? categoryName
+                : "Uncategorized",
             item.ProjectedNextPeriodRevenue,
             item.CurrentPeriodRevenue,
             item.RecentGrowthPercent,
@@ -370,7 +372,6 @@ public sealed class SecureSalesInsightsRepository : ISecureSalesInsightsReposito
 
     private static IQueryable<SalesLineProjection> ApplyFilters(IQueryable<SalesLineProjection> query, SalesInsightFilterOptions options)
     {
-        var top = ClampTop(options.Top);
         var start = options.StartDate?.ToDateTime(TimeOnly.MinValue);
         var end = options.EndDate?.ToDateTime(TimeOnly.MaxValue);
 
@@ -388,7 +389,7 @@ public sealed class SecureSalesInsightsRepository : ISecureSalesInsightsReposito
             query = query.Where(item => item.ProductCategoryId.HasValue && categoryIds.Contains(item.ProductCategoryId.Value));
         }
 
-        return query.Take(top * 200);
+        return query;
     }
 
     private static int ClampTop(int top) => Math.Clamp(top, 1, 100);

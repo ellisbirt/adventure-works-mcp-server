@@ -76,7 +76,22 @@ public class McpApiEndpointsTests : IAsyncLifetime
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.GetProperty("id").GetString().Should().Be("tools");
-        body.GetProperty("result").GetProperty("tools").GetArrayLength().Should().Be(10);
+        var toolNames = body.GetProperty("result").GetProperty("tools")
+            .EnumerateArray()
+            .Select(tool => tool.GetProperty("name").GetString())
+            .ToList();
+        toolNames.Should().Contain([
+            "get_customer_history",
+            "list_database_tables",
+            "read_database_table",
+            "get_product_profitability_summary",
+            "get_sales_trend_summary",
+            "get_customer_value_summary",
+            "get_product_mix_summary",
+            "get_geography_channel_summary",
+            "get_inventory_risk_summary",
+            "get_demand_forecast_summary"
+        ]);
         body.GetProperty("result").GetProperty("tools")[0].GetProperty("inputSchema").GetProperty("required").GetArrayLength().Should().Be(1);
     }
 

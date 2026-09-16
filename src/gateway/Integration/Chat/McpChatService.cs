@@ -74,6 +74,7 @@ public sealed class McpChatService : IMcpChatService
             ["limit"] = Math.Clamp(selection.Limit ?? 20, 1, 100)
         };
         var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
+        if (response.IsError) throw new InvalidOperationException(response.Content.FirstOrDefault()?.Text ?? "The selected MCP tool returned an error.");
         return response.Content.FirstOrDefault()?.Text ?? string.Empty;
     }
 

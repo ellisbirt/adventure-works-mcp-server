@@ -81,4 +81,22 @@ public class McpChatServiceTests
         result.Tool.Should().Be("read_database_table");
         toolExecutor.Verify(executor => executor.ExecuteToolAsync("read_database_table", It.Is<IReadOnlyDictionary<string, object>>(args => IsReadRequest(args, "SalesLT", "Product", 2)), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task AskAsync_WhenToolReturnsError_ThrowsInvalidOperationException()
+    {
+        var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
+        var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("read_database_table", It.Is<IReadOnlyDictionary<string, object>>(args => IsReadRequest(args, "SalesLT", "Product", 2)), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: "Error: unavailable table")], true));
+        anthropic.Setup(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("{\"tool\":\"read_database_table\",\"schema\":\"SalesLT\",\"table\":\"Product\",\"limit\":2}");
+        var service = new McpChatService(anthropic.Object, toolExecutor.Object);
+
+        var action = () => service.AskAsync("Tell me about Road Bike");
+
+        await action.Should().ThrowAsync<InvalidOperationException>();
+    }
 }

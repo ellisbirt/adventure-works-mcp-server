@@ -109,8 +109,8 @@ public sealed class McpToolExecutor : IMcpToolExecutor
             ["top"] = new("integer", "Optional number of groups to return, from 1 through 100."),
             ["startDate"] = new("string", "Optional inclusive ISO date (yyyy-MM-dd) lower bound for order date."),
             ["endDate"] = new("string", "Optional inclusive ISO date (yyyy-MM-dd) upper bound for order date."),
-            ["productIds"] = new("array", "Optional product identity key filter array."),
-            ["productCategoryIds"] = new("array", "Optional product category identity key filter array.")
+            ["productIds"] = new("array", "Optional product identity key filter array.", new McpPropertyItemDefinition("integer")),
+            ["productCategoryIds"] = new("array", "Optional product category identity key filter array.", new McpPropertyItemDefinition("integer"))
         });
 
     private static bool TryParseSalesInsightTool(
@@ -156,6 +156,13 @@ public sealed class McpToolExecutor : IMcpToolExecutor
 
         if (!TryGetIntList(arguments, "productIds", out var productIds, out error)) return true;
         if (!TryGetIntList(arguments, "productCategoryIds", out var productCategoryIds, out error)) return true;
+        var totalFilterCount = (productIds?.Count ?? 0) + (productCategoryIds?.Count ?? 0);
+        if (totalFilterCount > 200)
+        {
+            error = "Error: combined productIds and productCategoryIds filters cannot exceed 200 values.";
+            return true;
+        }
+
         options = new SalesInsightFilterOptions(top, startDate, endDate, productIds, productCategoryIds);
         return true;
     }
