@@ -130,7 +130,7 @@ public sealed class McpChatService : IMcpChatService
 
         var schema = root.TryGetProperty("schema", out var schemaElement) ? schemaElement.GetString() : null;
         var table = root.TryGetProperty("table", out var tableElement) ? tableElement.GetString() : null;
-        var limit = root.TryGetProperty("limit", out var limitElement) && limitElement.TryGetInt32(out var value) ? value : null;
+        var limit = root.TryGetProperty("limit", out var limitElement) && limitElement.TryGetInt32(out var value) ? value : (int?)null;
         if (!string.IsNullOrWhiteSpace(schema) && !arguments.ContainsKey("schema")) arguments["schema"] = schema;
         if (!string.IsNullOrWhiteSpace(table) && !arguments.ContainsKey("table")) arguments["table"] = table;
         if (limit is not null && !arguments.ContainsKey("limit")) arguments["limit"] = limit.Value;

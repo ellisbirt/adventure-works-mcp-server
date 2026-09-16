@@ -26,12 +26,13 @@ public sealed class SecureSalesSummaryRepository : ISecureSalesSummaryRepository
     public async Task<string> GetTopSellingProductsSummaryAsync(SalesSummaryFilter filter, CancellationToken cancellationToken = default)
     {
         var normalizedFilter = NormalizeFilter(filter);
-        var summaries = await BuildSummaryRowsQuery(normalizedFilter)
+        var summaries = (await BuildSummaryRowsAsync(normalizedFilter, cancellationToken))
             .OrderByDescending(item => item.TotalQuantitySold)
             .ThenByDescending(item => item.TotalRevenue)
             .ThenBy(item => item.ProductId)
             .Take(normalizedFilter.Top)
-            .ToListAsync(cancellationToken);
+            .Select(ToSalesProductSummaryRow)
+            .ToList();
 
         return JsonSerializer.Serialize(
             new SalesSummaryResponse("top_selling_products_by_quantity", RevenueDefinition, normalizedFilter, summaries),
@@ -41,19 +42,20 @@ public sealed class SecureSalesSummaryRepository : ISecureSalesSummaryRepository
     public async Task<string> GetHighestRevenueProductsSummaryAsync(SalesSummaryFilter filter, CancellationToken cancellationToken = default)
     {
         var normalizedFilter = NormalizeFilter(filter);
-        var summaries = await BuildSummaryRowsQuery(normalizedFilter)
+        var summaries = (await BuildSummaryRowsAsync(normalizedFilter, cancellationToken))
             .OrderByDescending(item => item.TotalRevenue)
             .ThenByDescending(item => item.TotalQuantitySold)
             .ThenBy(item => item.ProductId)
             .Take(normalizedFilter.Top)
-            .ToListAsync(cancellationToken);
+            .Select(ToSalesProductSummaryRow)
+            .ToList();
 
         return JsonSerializer.Serialize(
             new SalesSummaryResponse("highest_revenue_products", RevenueDefinition, normalizedFilter, summaries),
             JsonOptions);
     }
 
-    private IQueryable<SalesProductSummaryRow> BuildSummaryRowsQuery(SalesSummaryFilter filter)
+    private async Task<IReadOnlyList<SalesSummaryAggregate>> BuildSummaryRowsAsync(SalesSummaryFilter filter, CancellationToken cancellationToken)
     {
         var query =
             from detail in _context.SalesOrderDetails.AsNoTracking()
@@ -92,24 +94,39 @@ public sealed class SecureSalesSummaryRepository : ISecureSalesSummaryRepository
         if (filter.ProductCategoryIds is { Count: > 0 })
             query = query.Where(item => item.ProductCategoryId.HasValue && filter.ProductCategoryIds.Contains(item.ProductCategoryId.Value));
 
-        return query
+        var filteredRows = await query
+            .Select(item => new
+            {
+                item.SalesOrderId,
+                item.OrderQty,
+                item.LineTotal,
+                item.ProductId,
+                ProductName = item.Name,
+                item.ProductNumber,
+                item.ProductCategoryId,
+                ProductCategoryName = item.CategoryName
+            })
+            .ToListAsync(cancellationToken);
+
+        return filteredRows
             .GroupBy(item => new
             {
                 item.ProductId,
-                item.Name,
+                item.ProductName,
                 item.ProductNumber,
                 item.ProductCategoryId,
-                item.CategoryName
+                item.ProductCategoryName
             })
-            .Select(group => new SalesProductSummaryRow(
+            .Select(group => new SalesSummaryAggregate(
                 group.Key.ProductId,
-                group.Key.Name,
+                group.Key.ProductName,
                 group.Key.ProductNumber,
                 group.Key.ProductCategoryId,
-                group.Key.CategoryName,
+                group.Key.ProductCategoryName,
                 group.Sum(item => (int)item.OrderQty),
                 group.Sum(item => item.LineTotal),
-                group.Select(item => item.SalesOrderId).Distinct().Count()));
+                group.Select(item => item.SalesOrderId).Distinct().Count()))
+            .ToList();
     }
 
     internal static SalesSummaryFilter NormalizeFilter(SalesSummaryFilter filter)
@@ -119,4 +136,25 @@ public sealed class SecureSalesSummaryRepository : ISecureSalesSummaryRepository
         var top = Math.Clamp(filter.Top <= 0 ? 10 : filter.Top, 1, 100);
         return new SalesSummaryFilter(filter.StartDate, filter.EndDate, validProductIds, validProductCategoryIds, top);
     }
+
+    private static SalesProductSummaryRow ToSalesProductSummaryRow(SalesSummaryAggregate item) =>
+        new(
+            item.ProductId,
+            item.ProductName,
+            item.ProductNumber,
+            item.ProductCategoryId,
+            item.ProductCategoryName,
+            item.TotalQuantitySold,
+            item.TotalRevenue,
+            item.OrderCount);
+
+    private sealed record SalesSummaryAggregate(
+        int ProductId,
+        string ProductName,
+        string ProductNumber,
+        int? ProductCategoryId,
+        string? ProductCategoryName,
+        int TotalQuantitySold,
+        decimal TotalRevenue,
+        int OrderCount);
 }
