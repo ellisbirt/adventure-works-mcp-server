@@ -15,6 +15,12 @@ using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 using Serilog;
 
+if (args.Contains("--container-healthcheck", StringComparer.Ordinal))
+{
+    var exitCode = await RunContainerHealthcheckAsync();
+    Environment.Exit(exitCode);
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var authenticationAuthority = builder.Configuration["Authentication:Authority"];
 var authenticationAudience = builder.Configuration["Authentication:Audience"];
@@ -342,6 +348,28 @@ MapMcpEndpoints(api);
 MapChatEndpoints(api);
 
 app.Run();
+
+static async Task<int> RunContainerHealthcheckAsync()
+{
+    var healthUrl = Environment.GetEnvironmentVariable("CONTAINER_HEALTHCHECK_URL")
+        ?? "http://127.0.0.1:8080/health";
+
+    try
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        using var response = await client.GetAsync(healthUrl, cancellation.Token);
+        return response.IsSuccessStatusCode ? 0 : 1;
+    }
+    catch (HttpRequestException)
+    {
+        return 1;
+    }
+    catch (TaskCanceledException)
+    {
+        return 1;
+    }
+}
 
 internal sealed record HealthResponse(
     string Status,
