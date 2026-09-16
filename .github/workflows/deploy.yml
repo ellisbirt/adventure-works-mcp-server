@@ -7,6 +7,10 @@ on:
         description: Immutable GHCR tag produced by Gateway CI (for example sha-<commit-sha>). Leave blank to deploy the latest successful main build.
         required: false
         type: string
+      image_digest:
+        description: Content digest of the image (for example sha256:abc123...). Strongly recommended to prevent tag replacement attacks. Leave blank to query the registry (less secure).
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -26,29 +30,43 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Resolve image tag
+      - name: Resolve image tag and digest
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
+          IMAGE_DIGEST_INPUT: ${{ inputs.image_digest }}
         run: |
           image_tag="$IMAGE_TAG_INPUT"
+          image_digest="$IMAGE_DIGEST_INPUT"
+          
           if [[ -z "$image_tag" ]]; then
+            # Retrieve the latest successful Gateway CI run on main
             head_sha=$(gh api "repos/${{ github.repository }}/actions/workflows/gateway-image.yml/runs?branch=main&status=success&per_page=1" --jq '.workflow_runs[0].head_sha // empty')
             if [[ -z "$head_sha" ]]; then
-              echo "::error::No successful Gateway CI run found on main; pass image_tag explicitly."
+              echo "::error::No successful Gateway CI run found on main; pass image_tag and image_digest explicitly."
               exit 1
             fi
+            
             image_tag="sha-$head_sha"
             echo "No image_tag supplied; resolved latest successful main build: $image_tag"
           fi
+          
           echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
 
       - name: Validate image tag
         env:
           IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
         run: |
           [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
+
+      - name: Validate image digest format
+        if: inputs.image_digest != ''
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
 
       - name: Checkout
         uses: actions/checkout@v5
@@ -71,12 +89,55 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retrieve and verify image digest
+        id: digest
+        env:
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+          PROVIDED_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          # Query the registry to get the current digest for the tag
+          registry_digest=$(docker manifest inspect "${{ env.IMAGE_NAME }}:$IMAGE_TAG" --verbose | jq -r '.Descriptor.digest // empty')
+          
+          if [[ -z "$registry_digest" ]]; then
+            echo "::error::Failed to retrieve digest for image ${{ env.IMAGE_NAME }}:$IMAGE_TAG from registry."
+            exit 1
+          fi
+          
+          echo "Registry digest for tag $IMAGE_TAG: $registry_digest"
+          
+          # If a digest was provided as input, verify it matches the registry
+          if [[ -n "$PROVIDED_DIGEST" ]]; then
+            echo "Provided digest: $PROVIDED_DIGEST"
+            
+            if [[ "$registry_digest" != "$PROVIDED_DIGEST" ]]; then
+              echo "::error::Digest mismatch! The image tag $IMAGE_TAG in the registry has digest $registry_digest, but expected $PROVIDED_DIGEST. The image may have been replaced."
+              exit 1
+            fi
+            
+            echo "✓ Digest verification passed. Provided digest matches registry."
+          else
+            echo "::warning::No digest provided. Trusting current registry content for tag $IMAGE_TAG. For stronger security, provide the image_digest from the build workflow."
+            echo "Using registry digest: $registry_digest"
+          fi
+          
+          # Store the verified digest for deployment
+          echo "verified_digest=$registry_digest" >> "$GITHUB_OUTPUT"
+
       - name: Update Container App image tag
         id: gateway
         env:
           IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+          IMAGE_DIGEST: ${{ steps.digest.outputs.verified_digest }}
         run: |
-          image="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          # Use digest-based reference for immutable deployment
+          image="${{ env.IMAGE_NAME }}@$IMAGE_DIGEST"
           # Container Apps caps app-name + revision-suffix at 54 chars combined, so the
           # revision suffix uses a short SHA rather than the full 40-character image tag.
           revision_suffix="sha-${IMAGE_TAG#sha-}"
@@ -137,7 +198,8 @@ jobs:
             --revision "$revision"
           {
             echo "### Deployment"
-            echo "- Image: \`${{ env.IMAGE_NAME }}:${{ steps.resolve.outputs.image_tag }}\`"
+            echo "- Image: \`${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.verified_digest }}\`"
             echo "- Source commit: \`${{ steps.resolve.outputs.image_tag }}\`"
+            echo "- Digest: \`${{ steps.digest.outputs.verified_digest }}\`"
             echo "- Revision restarted: \`$revision\`"
           } >> "$GITHUB_STEP_SUMMARY"
