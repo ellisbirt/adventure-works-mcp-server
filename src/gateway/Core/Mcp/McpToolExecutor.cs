@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Logging;
@@ -214,10 +215,10 @@ public sealed class McpToolExecutor : IMcpToolExecutor
                 return false;
             }
 
-            return DateOnly.TryParse(element.GetString(), out value);
+            return DateOnly.TryParseExact(element.GetString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
         }
 
-        return DateOnly.TryParse(rawValue.ToString(), out value);
+        return DateOnly.TryParseExact(rawValue.ToString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
     }
 
     private static bool TryConvertIntList(object rawValue, out IReadOnlyList<int> values)

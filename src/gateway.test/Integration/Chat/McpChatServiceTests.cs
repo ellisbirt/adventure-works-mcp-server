@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EnterpriseAiGateway.Core.DTOs;
 using EnterpriseAiGateway.Core.Mcp;
 using EnterpriseAiGateway.Data.Repositories;
@@ -25,6 +26,20 @@ public class McpChatServiceTests
         arguments.TryGetValue("schema", out var s) && s.Equals(schema) &&
         arguments.TryGetValue("table", out var t) && t.Equals(table) &&
         arguments.TryGetValue("limit", out var l) && l.Equals(limit);
+
+    private static bool IsSummaryRequest(IReadOnlyDictionary<string, object> arguments, int top, string startDate, string endDate) =>
+        arguments.TryGetValue("top", out var topValue) &&
+        topValue is JsonElement topElement &&
+        topElement.ValueKind == JsonValueKind.Number &&
+        topElement.GetInt32() == top &&
+        arguments.TryGetValue("startDate", out var startDateValue) &&
+        startDateValue is JsonElement startDateElement &&
+        startDateElement.ValueKind == JsonValueKind.String &&
+        startDateElement.GetString() == startDate &&
+        arguments.TryGetValue("endDate", out var endDateValue) &&
+        endDateValue is JsonElement endDateElement &&
+        endDateElement.ValueKind == JsonValueKind.String &&
+        endDateElement.GetString() == endDate;
 
     [Fact]
     public async Task AskAsync_WithTableRequest_ExecutesOnlyCatalogApprovedToolAndReturnsAnswer()
@@ -100,7 +115,7 @@ public class McpChatServiceTests
         toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
         toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
-        toolExecutor.Setup(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.Is<IReadOnlyDictionary<string, object>>(args => IsSummaryRequest(args, 5, "2024-01-01", "2024-12-31")), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: """{"metric":"top_selling_products_by_quantity","items":[{"productId":1}]}""")]));
         anthropic.SetupSequence(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("""{"tool":"get_top_selling_products_summary","arguments":{"top":5,"startDate":"2024-01-01","endDate":"2024-12-31"}}""")
@@ -111,7 +126,7 @@ public class McpChatServiceTests
 
         result.Tool.Should().Be("get_top_selling_products_summary");
         result.Message.Should().Contain("top seller");
-        toolExecutor.Verify(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()), Times.Once);
+        toolExecutor.Verify(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.Is<IReadOnlyDictionary<string, object>>(args => IsSummaryRequest(args, 5, "2024-01-01", "2024-12-31")), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

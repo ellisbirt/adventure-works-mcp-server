@@ -85,7 +85,7 @@ public sealed class McpChatService : IMcpChatService
                 ["limit"] = Math.Clamp(limit, 1, 100)
             };
             var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
-            if (response.IsError) throw new InvalidOperationException("The database assistant could not execute read_database_table.");
+            if (response.IsError) throw new InvalidOperationException($"The database assistant could not execute read_database_table. {response.Content.FirstOrDefault()?.Text}");
             return response.Content.FirstOrDefault()?.Text ?? string.Empty;
         }
 
@@ -93,7 +93,7 @@ public sealed class McpChatService : IMcpChatService
             throw new InvalidOperationException("The model selected an unsupported MCP tool.");
 
         var summaryResponse = await _toolExecutor.ExecuteToolAsync(selection.Tool, selection.Arguments, cancellationToken);
-        if (summaryResponse.IsError) throw new InvalidOperationException("The database assistant could not execute the summary request.");
+        if (summaryResponse.IsError) throw new InvalidOperationException($"The database assistant could not execute the summary request. {summaryResponse.Content.FirstOrDefault()?.Text}");
         return summaryResponse.Content.FirstOrDefault()?.Text ?? string.Empty;
     }
 
