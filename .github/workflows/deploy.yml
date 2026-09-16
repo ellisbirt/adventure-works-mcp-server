@@ -73,38 +73,73 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+          PROVIDED_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
         run: |
           commit_sha="${IMAGE_TAG#sha-}"
 
           # Verify the commit is on the protected main branch without requiring a checkout.
-          branch_status=$(gh api "repos/${{ github.repository }}/compare/main...$commit_sha" --jq '.status')
-          if [[ "$branch_status" != "identical" && "$branch_status" != "behind" ]]; then
+          compare_response=$(gh api "repos/${{ github.repository }}/compare/main...$commit_sha")
+          merge_base_sha=$(jq -r '.merge_base_commit.sha // empty' <<<"$compare_response")
+          if [[ "$merge_base_sha" != "$commit_sha" ]]; then
             echo "::error::Commit $commit_sha is not on or reachable from protected main branch"
             exit 1
           fi
 
-          # Verify the Gateway CI workflow completed successfully for this commit
-          workflow_run_id=$(gh api "repos/${{ github.repository }}/actions/workflows/gateway-image.yml/runs?head_sha=$commit_sha&status=success&per_page=10" --jq '.workflow_runs[] | select(.head_branch == "main") | .id' | head -n1)
-          if [[ -z "$workflow_run_id" ]]; then
-            echo "::error::No successful Gateway CI run found for commit $commit_sha"
+          # Verify the latest completed Gateway CI workflow run for this commit succeeded.
+          latest_workflow_conclusion=$(gh api --paginate --slurp "repos/${{ github.repository }}/actions/workflows/gateway-image.yml/runs?head_sha=$commit_sha&status=completed&per_page=100" --jq '[.[].workflow_runs[] | select((.head_branch == "main" or .event == "push") and .head_repository.full_name == "${{ github.repository }}")] | sort_by(.created_at // "", .run_attempt // 0) | last | .conclusion // empty')
+          if [[ -z "$latest_workflow_conclusion" ]]; then
+            echo "::error::No completed Gateway CI run found for commit $commit_sha on main in this repository"
+            exit 1
+          fi
+          if [[ "$latest_workflow_conclusion" != "success" ]]; then
+            echo "::error::Latest Gateway CI run for commit $commit_sha did not succeed"
             exit 1
           fi
 
-          # Verify the GHCR image exists with this tag
-          package_scope="users"
-          owner_type=$(gh api "repos/${{ github.repository }}" --jq '.owner.type')
-          if [[ "$owner_type" == "Organization" ]]; then
-            package_scope="orgs"
-          fi
-          package_name="${{ github.event.repository.name }}"
+          # Verify the GHCR image exists with this tag and capture its immutable digest.
+          registry_repo="${IMAGE_NAME#ghcr.io/}"
           image_ref="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
-          if ! gh api --silent "$package_scope/${{ github.repository_owner }}/packages/container/$package_name/versions?per_page=100" --jq --arg tag "$IMAGE_TAG" '.[] | select(any(.metadata.container.tags[]?; . == $tag))' | grep -q .; then
+          manifest_json=$(curl -fsSL \
+            -u "${{ github.actor }}:$GH_TOKEN" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/$registry_repo/manifests/$IMAGE_TAG")
+          verified_digest=$(curl -fsSI \
+            -u "${{ github.actor }}:$GH_TOKEN" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/$registry_repo/manifests/$IMAGE_TAG" | tr -d '\r' | awk 'BEGIN { IGNORECASE = 1 } $1 == \"docker-content-digest:\" { print $2 }')
+          if [[ -z "$verified_digest" ]]; then
             echo "::error::GHCR image not found: $image_ref"
             exit 1
           fi
+          child_manifest_digest=$(jq -r '.manifests[0].digest // empty' <<<"$manifest_json")
+          if [[ -n "$child_manifest_digest" ]]; then
+            manifest_json=$(curl -fsSL \
+              -u "${{ github.actor }}:$GH_TOKEN" \
+              -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/$registry_repo/manifests/$child_manifest_digest")
+          fi
+          config_digest=$(jq -r '.config.digest // empty' <<<"$manifest_json")
+          if [[ -z "$config_digest" ]]; then
+            echo "::error::Failed to resolve image config digest for $image_ref"
+            exit 1
+          fi
+          image_revision=$(curl -fsSL \
+            -u "${{ github.actor }}:$GH_TOKEN" \
+            "https://ghcr.io/v2/$registry_repo/blobs/$config_digest" | jq -r '.config.Labels[\"org.opencontainers.image.revision\"] // empty')
+          if [[ "$image_revision" != "$commit_sha" ]]; then
+            echo "::error::Registry image revision $image_revision does not match commit $commit_sha"
+            exit 1
+          fi
 
-          echo "Verified provenance: commit $commit_sha passed Gateway CI on main and image exists in GHCR"
+          if [[ -n "$PROVIDED_DIGEST" && "$verified_digest" != "$PROVIDED_DIGEST" ]]; then
+            echo "::error::Digest mismatch! The image tag $IMAGE_TAG in the registry has digest $verified_digest, but expected $PROVIDED_DIGEST. The image may have been replaced."
+            exit 1
+          fi
+
+          echo "Verified provenance: commit $commit_sha passed Gateway CI on main and image exists in GHCR as $verified_digest"
           echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+          echo "verified_digest=$verified_digest" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v5.2.2
@@ -126,52 +161,11 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Retrieve and verify image digest
-        id: digest
-        env:
-          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
-          PROVIDED_DIGEST: ${{ steps.resolve.outputs.image_digest }}
-        run: |
-          # Query the registry to get the current digest for the tag
-          registry_digest=$(docker manifest inspect "${{ env.IMAGE_NAME }}:$IMAGE_TAG" --verbose | jq -r '.Descriptor.digest // empty')
-          
-          if [[ -z "$registry_digest" ]]; then
-            echo "::error::Failed to retrieve digest for image ${{ env.IMAGE_NAME }}:$IMAGE_TAG from registry."
-            exit 1
-          fi
-          
-          echo "Registry digest for tag $IMAGE_TAG: $registry_digest"
-          
-          # If a digest was provided as input, verify it matches the registry
-          if [[ -n "$PROVIDED_DIGEST" ]]; then
-            echo "Provided digest: $PROVIDED_DIGEST"
-            
-            if [[ "$registry_digest" != "$PROVIDED_DIGEST" ]]; then
-              echo "::error::Digest mismatch! The image tag $IMAGE_TAG in the registry has digest $registry_digest, but expected $PROVIDED_DIGEST. The image may have been replaced."
-              exit 1
-            fi
-            
-            echo "✓ Digest verification passed. Provided digest matches registry."
-          else
-            echo "::warning::No digest provided. Trusting current registry content for tag $IMAGE_TAG. For stronger security, provide the image_digest from the build workflow."
-            echo "Using registry digest: $registry_digest"
-          fi
-          
-          # Store the verified digest for deployment
-          echo "verified_digest=$registry_digest" >> "$GITHUB_OUTPUT"
-
       - name: Update Container App image tag
         id: gateway
         env:
           IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
-          IMAGE_DIGEST: ${{ steps.digest.outputs.verified_digest }}
+          IMAGE_DIGEST: ${{ steps.verify.outputs.verified_digest }}
         run: |
           # Use digest-based reference for immutable deployment
           image="${{ env.IMAGE_NAME }}@$IMAGE_DIGEST"
@@ -235,8 +229,8 @@ jobs:
             --revision "$revision"
           {
             echo "### Deployment"
-            echo "- Image: \`${{ env.IMAGE_NAME }}@${{ steps.digest.outputs.verified_digest }}\`"
+            echo "- Image: \`${{ env.IMAGE_NAME }}@${{ steps.verify.outputs.verified_digest }}\`"
             echo "- Source commit: \`${{ steps.resolve.outputs.image_tag }}\`"
-            echo "- Digest: \`${{ steps.digest.outputs.verified_digest }}\`"
+            echo "- Digest: \`${{ steps.verify.outputs.verified_digest }}\`"
             echo "- Revision restarted: \`$revision\`"
           } >> "$GITHUB_STEP_SUMMARY"
