@@ -1,4 +1,5 @@
 using System.Text.Json;
+using EnterpriseAiGateway.Core.Mcp;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Integration.Anthropic;
 
@@ -14,20 +15,21 @@ public record McpChatResult(string Message, string Tool);
 public sealed class McpChatService : IMcpChatService
 {
     private const string SystemPrompt = "You answer questions about the AdventureWorks database. Use only the supplied MCP tool result. Do not infer personal information or mention excluded fields.";
+    private static readonly IReadOnlyDictionary<string, object> NoArguments = new Dictionary<string, object>();
     private readonly IAnthropicClient _anthropicClient;
-    private readonly ISecureTableCatalogRepository _tableCatalog;
+    private readonly IMcpToolExecutor _toolExecutor;
 
-    public McpChatService(IAnthropicClient anthropicClient, ISecureTableCatalogRepository tableCatalog)
+    public McpChatService(IAnthropicClient anthropicClient, IMcpToolExecutor toolExecutor)
     {
         _anthropicClient = anthropicClient;
-        _tableCatalog = tableCatalog;
+        _toolExecutor = toolExecutor;
     }
 
     public async Task<McpChatResult> AskAsync(string message, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(message)) throw new ArgumentException("A chat message is required.", nameof(message));
 
-        var tables = await _tableCatalog.GetTablesAsync();
+        var tables = await GetSafeCatalogAsync(cancellationToken);
         var routingPrompt = "You are an MCP tool router. Return JSON only, without markdown. " +
             "Available tools: list_database_tables, read_database_table. " +
             "For list_database_tables return {\"tool\":\"list_database_tables\"}. " +
@@ -35,7 +37,7 @@ public sealed class McpChatService : IMcpChatService
             $"Only choose a schema, table, and columns from this safe MCP catalog: {JsonSerializer.Serialize(tables)}";
         var route = await _anthropicClient.SendMessageAsync(routingPrompt, message, cancellationToken);
         var selection = ParseSelection(route);
-        var toolResult = await ExecuteToolAsync(selection, tables);
+        var toolResult = await ExecuteToolAsync(selection, tables, cancellationToken);
         var answer = await _anthropicClient.SendMessageAsync(
             SystemPrompt,
             $"Question: {message}\n\nMCP tool: {selection.Tool}\nMCP result: {toolResult}",
@@ -44,7 +46,16 @@ public sealed class McpChatService : IMcpChatService
         return new McpChatResult(answer, selection.Tool);
     }
 
-    private async Task<string> ExecuteToolAsync(McpToolSelection selection, IReadOnlyList<SafeTableDefinition> tables)
+    // Routes through the same MCP tool-dispatch executor the /mcp JSON-RPC endpoint uses, rather
+    // than reading the repository directly, so chat literally exercises the MCP tool surface.
+    private async Task<IReadOnlyList<SafeTableDefinition>> GetSafeCatalogAsync(CancellationToken cancellationToken)
+    {
+        var response = await _toolExecutor.ExecuteToolAsync("list_database_tables", NoArguments, cancellationToken);
+        var text = response.Content.FirstOrDefault()?.Text ?? "[]";
+        return JsonSerializer.Deserialize<List<SafeTableDefinition>>(text) ?? [];
+    }
+
+    private async Task<string> ExecuteToolAsync(McpToolSelection selection, IReadOnlyList<SafeTableDefinition> tables, CancellationToken cancellationToken)
     {
         if (selection.Tool == "list_database_tables") return JsonSerializer.Serialize(tables);
 
@@ -56,7 +67,14 @@ public sealed class McpChatService : IMcpChatService
             item.Name.Equals(selection.Table, StringComparison.OrdinalIgnoreCase));
         if (!isKnownTable) throw new InvalidOperationException("The model selected a table outside the safe MCP catalog.");
 
-        return await _tableCatalog.GetTableRowsAsync(selection.Schema, selection.Table, Math.Clamp(selection.Limit ?? 20, 1, 100));
+        var arguments = new Dictionary<string, object>
+        {
+            ["schema"] = selection.Schema,
+            ["table"] = selection.Table,
+            ["limit"] = Math.Clamp(selection.Limit ?? 20, 1, 100)
+        };
+        var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
+        return response.Content.FirstOrDefault()?.Text ?? string.Empty;
     }
 
     private static McpToolSelection ParseSelection(string route)

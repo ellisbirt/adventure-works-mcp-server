@@ -1,6 +1,6 @@
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
-using FluentAssertions;
+using AwesomeAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Xunit;

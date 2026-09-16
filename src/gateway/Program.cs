@@ -1,5 +1,6 @@
 using System.Text.Json;
 using EnterpriseAiGateway.Core.DTOs;
+using EnterpriseAiGateway.Core.Mcp;
 using EnterpriseAiGateway.Data.Repositories;
 using EnterpriseAiGateway.Data.Scaffolded;
 using EnterpriseAiGateway.Data.Interceptors;
@@ -91,6 +92,7 @@ builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
 
 builder.Services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
 builder.Services.AddScoped<ISecureTableCatalogRepository, SecureTableCatalogRepository>();
+builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Anthropic:ApiKey"]))
 {
     builder.Services.AddAnthropicClient(builder.Configuration);
@@ -180,8 +182,7 @@ void MapMcpEndpoints(IEndpointRouteBuilder routes)
 {
     routes.MapPost("/mcp", async (
         HttpRequest httpRequest,
-        ISecureCustomerRepository repo,
-        ISecureTableCatalogRepository tableCatalog,
+        IMcpToolExecutor toolExecutor,
         ILogger<Program> logger,
         CancellationToken cancellationToken) =>
     {
@@ -207,14 +208,14 @@ void MapMcpEndpoints(IEndpointRouteBuilder routes)
                 var responses = new List<McpJsonRpcResponse>();
                 foreach (var item in document.RootElement.EnumerateArray())
                 {
-                    var response = await ProcessMcpRequestAsync(item, repo, tableCatalog, logger, cancellationToken);
+                    var response = await ProcessMcpRequestAsync(item, toolExecutor, logger, cancellationToken);
                     if (response is not null) responses.Add(response);
                 }
 
                 return responses.Count == 0 ? Results.NoContent() : Results.Json(responses);
             }
 
-            var singleResponse = await ProcessMcpRequestAsync(document.RootElement, repo, tableCatalog, logger, cancellationToken);
+            var singleResponse = await ProcessMcpRequestAsync(document.RootElement, toolExecutor, logger, cancellationToken);
             return singleResponse is null ? Results.NoContent() : Results.Json(singleResponse);
         }
     }).RequireRateLimiting("mcp");
@@ -224,8 +225,7 @@ static JsonElement JsonNullId() => JsonDocument.Parse("null").RootElement.Clone(
 
 async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
     JsonElement element,
-    ISecureCustomerRepository repo,
-    ISecureTableCatalogRepository tableCatalog,
+    IMcpToolExecutor toolExecutor,
     ILogger<Program> logger,
     CancellationToken cancellationToken)
 {
@@ -271,7 +271,7 @@ async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
     if (request.Method == "tools/list")
     {
         GatewayLogMessages.ToolsRequested(logger);
-        return Response(new { tools = BuildMcpTools() });
+        return Response(new { tools = toolExecutor.GetToolDefinitions() });
     }
 
     if (request.Method != "tools/call") return Error(-32601, "Method not found.");
@@ -287,55 +287,8 @@ async Task<McpJsonRpcResponse?> ProcessMcpRequestAsync(
         foreach (var property in argumentsElement.EnumerateObject()) arguments[property.Name] = property.Value.Clone();
     }
 
-    var toolResponse = await ExecuteMcpToolAsync(nameElement.GetString()!, arguments, repo, tableCatalog, logger);
+    var toolResponse = await toolExecutor.ExecuteToolAsync(nameElement.GetString()!, arguments, cancellationToken);
     return Response(toolResponse);
-}
-
-List<McpToolDefinition> BuildMcpTools() =>
-[
-    new("get_customer_history", "Safely reads strongly-typed historical relational summaries for a specific customer from the database schemas.", new McpInputSchema(Properties: new Dictionary<string, McpPropertyDefinition> { ["customerId"] = new("integer", "The unique identity key integer of the customer entity.") }, Required: ["customerId"])),
-    new("list_database_tables", "Lists every database table and its useful columns available to the model; personal fields are redacted.", new McpInputSchema()),
-    new("read_database_table", "Reads up to 100 rows from an available database table; personal fields are redacted and marked [REDACTED].", new McpInputSchema(Properties: new Dictionary<string, McpPropertyDefinition> { ["schema"] = new("string", "Schema returned by list_database_tables."), ["table"] = new("string", "Table name returned by list_database_tables."), ["limit"] = new("integer", "Optional number of rows to return, from 1 through 100.") }, Required: ["schema", "table"]))
-];
-
-async Task<McpCallToolResponse> ExecuteMcpToolAsync(
-    string name,
-    Dictionary<string, object> arguments,
-    ISecureCustomerRepository repo,
-    ISecureTableCatalogRepository tableCatalog,
-    ILogger<Program> logger)
-{
-    if (name == "list_database_tables")
-        return new([new("text", JsonSerializer.Serialize(await tableCatalog.GetTablesAsync()))]);
-
-    if (name == "read_database_table")
-    {
-        if (!arguments.TryGetValue("schema", out var rawSchema) || !arguments.TryGetValue("table", out var rawTable) ||
-            string.IsNullOrWhiteSpace(rawSchema.ToString()) || string.IsNullOrWhiteSpace(rawTable.ToString()))
-            return new([new("text", "Error: Missing required arguments: schema and table.")], true);
-
-        var limit = 20;
-        if (arguments.TryGetValue("limit", out var rawLimit) && (!int.TryParse(rawLimit.ToString(), out limit) || limit is < 1 or > 100))
-            return new([new("text", "Error: limit must be an integer from 1 through 100.")], true);
-
-        var rows = await tableCatalog.GetTableRowsAsync(rawSchema.ToString()!, rawTable.ToString()!, limit);
-        return new([new("text", rows)]);
-    }
-
-    if (name != "get_customer_history")
-    {
-        GatewayLogMessages.UnknownTool(logger, name);
-        return new([new("text", "Error: The requested tool is not mapped to this gateway server profile.")], true);
-    }
-
-    if (!arguments.TryGetValue("customerId", out var rawId) || !int.TryParse(rawId.ToString(), out var customerId) || customerId <= 0)
-    {
-        GatewayLogMessages.InvalidCustomerId(logger);
-        return new([new("text", "Error: Missing or malformed required argument: customerId.")], true);
-    }
-
-    GatewayLogMessages.CustomerHistoryRequested(logger, customerId);
-    return new([new("text", await repo.GetCustomerContextAsync(customerId))]);
 }
 
 void MapChatEndpoints(IEndpointRouteBuilder routes)

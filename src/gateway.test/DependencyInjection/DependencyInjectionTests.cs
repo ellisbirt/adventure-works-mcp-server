@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Moq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;

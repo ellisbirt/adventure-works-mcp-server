@@ -1,4 +1,4 @@
-using FluentAssertions;
+using AwesomeAssertions;
 using Moq;
 using EnterpriseAiGateway.Core.DTOs;
 using Xunit;
