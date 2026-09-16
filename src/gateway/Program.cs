@@ -91,6 +91,7 @@ builder.Services.AddDbContext<AdventureWorksDbContext>(options =>
         .AddInterceptors(new CorrelationCommandInterceptor()));
 
 builder.Services.AddScoped<ISecureCustomerRepository, SecureCustomerRepository>();
+builder.Services.AddScoped<ISecureSalesSummaryRepository, SecureSalesSummaryRepository>();
 builder.Services.AddScoped<ISecureTableCatalogRepository, SecureTableCatalogRepository>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Anthropic:ApiKey"]))
@@ -311,6 +312,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         catch (JsonException)
         {
             return Results.Json(new { error = "The AI returned an invalid MCP tool selection." }, statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (McpChatToolException exception)
+        {
+            return Results.BadRequest(new { error = exception.Message });
         }
         catch (InvalidOperationException)
         {
