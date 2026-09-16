@@ -127,14 +127,15 @@ resource "azurerm_application_insights" "gateway" {
 # For production applications requiring WAF, custom domains, or edge caching,
 # place Front Door/CDN in front of this endpoint.
 resource "azurerm_storage_account" "frontend" {
-  name                          = var.frontend_storage_account_name
-  resource_group_name           = azurerm_resource_group.gateway_rg.name
-  location                      = azurerm_resource_group.gateway_rg.location
-  account_tier                  = "Standard"
-  account_replication_type      = "LRS"
-  min_tls_version               = "TLS1_2"
-  https_traffic_only_enabled    = true
-  public_network_access_enabled = true
+  name                            = var.frontend_storage_account_name
+  resource_group_name             = azurerm_resource_group.gateway_rg.name
+  location                        = azurerm_resource_group.gateway_rg.location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  min_tls_version                 = "TLS1_2"
+  https_traffic_only_enabled      = true
+  public_network_access_enabled   = true
+  allow_nested_items_to_be_public = false
 
   tags = var.tags
 }
