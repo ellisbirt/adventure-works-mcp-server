@@ -12,6 +12,8 @@ public interface IMcpChatService
 
 public record McpChatResult(string Message, string Tool);
 
+public sealed class McpChatToolException(string message) : InvalidOperationException(message);
+
 public sealed class McpChatService : IMcpChatService
 {
     private const string SystemPrompt = "You answer questions about the AdventureWorks database. Use only the supplied MCP tool result. Do not infer personal information or mention excluded fields.";
@@ -85,7 +87,7 @@ public sealed class McpChatService : IMcpChatService
                 ["limit"] = Math.Clamp(limit, 1, 100)
             };
             var response = await _toolExecutor.ExecuteToolAsync("read_database_table", arguments, cancellationToken);
-            if (response.IsError) throw new InvalidOperationException($"The database assistant could not execute read_database_table. {response.Content.FirstOrDefault()?.Text}");
+            if (response.IsError) throw new McpChatToolException(response.Content.FirstOrDefault()?.Text ?? "The database assistant could not execute read_database_table.");
             return response.Content.FirstOrDefault()?.Text ?? string.Empty;
         }
 
@@ -93,7 +95,7 @@ public sealed class McpChatService : IMcpChatService
             throw new InvalidOperationException("The model selected an unsupported MCP tool.");
 
         var summaryResponse = await _toolExecutor.ExecuteToolAsync(selection.Tool, selection.Arguments, cancellationToken);
-        if (summaryResponse.IsError) throw new InvalidOperationException($"The database assistant could not execute the summary request. {summaryResponse.Content.FirstOrDefault()?.Text}");
+        if (summaryResponse.IsError) throw new McpChatToolException(summaryResponse.Content.FirstOrDefault()?.Text ?? "The database assistant could not execute the summary request.");
         return summaryResponse.Content.FirstOrDefault()?.Text ?? string.Empty;
     }
 

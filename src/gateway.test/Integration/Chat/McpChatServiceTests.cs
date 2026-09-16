@@ -130,6 +130,26 @@ public class McpChatServiceTests
     }
 
     [Fact]
+    public async Task AskAsync_WithSummaryToolError_ThrowsChatToolException()
+    {
+        var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);
+        var toolExecutor = new Mock<IMcpToolExecutor>(MockBehavior.Strict);
+        toolExecutor.Setup(executor => executor.GetToolDefinitions()).Returns(ToolDefinitions);
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("list_database_tables", It.IsAny<IReadOnlyDictionary<string, object>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: System.Text.Json.JsonSerializer.Serialize(Catalog))]));
+        toolExecutor.Setup(executor => executor.ExecuteToolAsync("get_top_selling_products_summary", It.Is<IReadOnlyDictionary<string, object>>(args => IsSummaryRequest(args, 5, "2024-01-01", "2024-12-31")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new McpCallToolResponse([new McpContentText(Text: "Invalid startDate filter.")], IsError: true));
+        anthropic.Setup(client => client.SendMessageAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("""{"tool":"get_top_selling_products_summary","arguments":{"top":5,"startDate":"2024-01-01","endDate":"2024-12-31"}}""");
+        var service = new McpChatService(anthropic.Object, toolExecutor.Object);
+
+        var action = () => service.AskAsync("What are the top selling products in 2024?");
+
+        await action.Should().ThrowAsync<McpChatToolException>()
+            .WithMessage("Invalid startDate filter.");
+    }
+
+    [Fact]
     public async Task AskAsync_WithToolOutsideDefinitionAllowList_RejectsSelection()
     {
         var anthropic = new Mock<IAnthropicClient>(MockBehavior.Strict);

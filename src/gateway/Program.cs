@@ -313,6 +313,10 @@ void MapChatEndpoints(IEndpointRouteBuilder routes)
         {
             return Results.Json(new { error = "The AI returned an invalid MCP tool selection." }, statusCode: StatusCodes.Status502BadGateway);
         }
+        catch (McpChatToolException exception)
+        {
+            return Results.BadRequest(new { error = exception.Message });
+        }
         catch (InvalidOperationException)
         {
             return Results.Json(new { error = "The database assistant could not complete the request." }, statusCode: StatusCodes.Status502BadGateway);
