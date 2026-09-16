@@ -50,19 +50,53 @@ jobs:
         run: |
           [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$ ]]
 
+      - name: Verify image provenance
+        id: verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+        run: |
+          commit_sha="${IMAGE_TAG#sha-}"
+          
+          # Verify the commit exists on the protected main branch
+          if ! git ls-remote --exit-code --heads origin main | grep -q "$commit_sha"; then
+            # Commit might be an ancestor of main, check if it's reachable from main
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$commit_sha" origin/main 2>/dev/null; then
+              echo "::error::Commit $commit_sha is not on or reachable from protected main branch"
+              exit 1
+            fi
+          fi
+          
+          # Verify the Gateway CI workflow completed successfully for this commit
+          workflow_run=$(gh api "repos/${{ github.repository }}/actions/workflows/gateway-image.yml/runs?head_sha=$commit_sha&status=success&per_page=1" --jq '.workflow_runs[0] // empty')
+          if [[ -z "$workflow_run" ]]; then
+            echo "::error::No successful Gateway CI run found for commit $commit_sha"
+            exit 1
+          fi
+          
+          # Verify the GHCR image exists with this tag
+          image_ref="${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+          if ! gh api --silent "orgs/${{ github.repository_owner }}/packages/container/$(basename ${{ github.repository }})/versions" --jq --arg tag "$IMAGE_TAG" '.[] | select(.metadata.container.tags[] == $tag)' | grep -q .; then
+            echo "::error::GHCR image not found: $image_ref"
+            exit 1
+          fi
+          
+          echo "Verified provenance: commit $commit_sha passed Gateway CI on main and image exists in GHCR"
+          echo "commit_sha=$commit_sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout selected artifact source
+      - name: Checkout verified artifact source
         env:
-          IMAGE_TAG: ${{ steps.resolve.outputs.image_tag }}
+          COMMIT_SHA: ${{ steps.verify.outputs.commit_sha }}
         run: |
-          commit_sha="${IMAGE_TAG#sha-}"
-          git fetch --no-tags origin "$commit_sha"
-          git checkout --detach "$commit_sha"
+          git fetch --no-tags origin "$COMMIT_SHA"
+          git checkout --detach "$COMMIT_SHA"
 
       - name: Login to Azure with OIDC
         uses: azure/login@v2
