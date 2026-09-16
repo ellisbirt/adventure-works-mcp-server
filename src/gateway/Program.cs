@@ -17,7 +17,8 @@ using Serilog;
 
 if (args.Contains("--container-healthcheck", StringComparer.Ordinal))
 {
-    return await RunContainerHealthcheckAsync();
+    var exitCode = await RunContainerHealthcheckAsync();
+    Environment.Exit(exitCode);
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -348,18 +349,10 @@ MapChatEndpoints(api);
 
 app.Run();
 
-internal sealed record HealthResponse(
-    string Status,
-    bool Liveness,
-    bool? Readiness,
-    bool? Database,
-    bool? Anthropic,
-    IReadOnlyList<string> Details);
-
 static async Task<int> RunContainerHealthcheckAsync()
 {
     var healthUrl = Environment.GetEnvironmentVariable("CONTAINER_HEALTHCHECK_URL")
-        ?? "http://127.0.0.1:8080/health/ready";
+        ?? "http://127.0.0.1:8080/health";
 
     try
     {
@@ -373,3 +366,11 @@ static async Task<int> RunContainerHealthcheckAsync()
         return 1;
     }
 }
+
+internal sealed record HealthResponse(
+    string Status,
+    bool Liveness,
+    bool? Readiness,
+    bool? Database,
+    bool? Anthropic,
+    IReadOnlyList<string> Details);
